@@ -4,6 +4,7 @@ import { BEASTS, BEAST_SPAWNS } from './config.js';
 import { mulberry32, clamp, dist2 } from './util.js';
 import { groundHeight } from './terrain.js';
 import { colliders } from './flora.js';
+import { instance } from './assets.js';
 
 const rng = mulberry32(9182);
 const V = new THREE.Vector3();
@@ -210,6 +211,9 @@ function makeBear() {
 }
 
 function makeCroc() {
+  // 外部 croc.glb 优先（croc.fbx 转换）：静态网格，legs 留空即不做程序化腿摆动
+  const ci = instance('croc');
+  if (ci) return { group: ci.wrap, legs: [], head: null, phase: rng() * 6.28 };
   const g = new THREE.Group();
   const skin = furMat(0x47542f, 0.72, SCALE_N), skinD = furMat(0x2f3a20, 0.7, SCALE_N), skinL = furMat(0x5f6c3c, 0.75, SCALE_N);
   // 躯干：扁长

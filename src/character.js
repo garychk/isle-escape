@@ -8,6 +8,7 @@ import { buildRifle, buildKnife } from './weapons.js';
 // 顺序有讲究：带方向后缀的必须排在 walk / run 前面，否则 walk_back 会被 /walk/ 抢走
 const ALIAS = [
   ['run', /run|sprint|jog_?fast/i],
+  ['aimWalk', /aim[_ ]?walk/i],   // 必须排在 walk 前，否则 aim_walk 会被 /walk/ 吞掉
   ['walk', /walk|jog/i],
   ['run_back', /run[_ ]?back|back[_ ]?run/i],
   ['walk_back', /walk[_ ]?back|back[_ ]?walk/i],
@@ -42,16 +43,26 @@ const MATERIALS = {
 const NATIVE_SPEED = {
   walk: 1.97, run: 6.68, walk_back: 2.17, run_back: 2.9,
   strafe_l: 1.9, strafe_r: 1.9, crouchwalk: 1.1, crouchidle: 1.0,
+  aimwalk: 0.58,   // 瞄准战术步行（Walk Forward，Blender 实测根位移 0.58 m/s）
 };
 
 // 属于"位移循环"的剪辑：切换时沿用彼此的相位，脚不跳
-const LOCO = new Set(['walk', 'run', 'walk_back', 'run_back', 'strafe_l', 'strafe_r', 'crouchWalk', 'crouchIdle']);
+const LOCO = new Set(['walk', 'run', 'walk_back', 'run_back', 'strafe_l', 'strafe_r', 'crouchWalk', 'crouchIdle', 'aimWalk']);
 
-// _poseWeapon 用的临时对象（避免每帧分配）
+// _poseWeapon / IK 用的临时对象（避免每帧分配）
 const _vA = new THREE.Vector3(), _vB = new THREE.Vector3(), _vC = new THREE.Vector3(), _vD = new THREE.Vector3();
 const _qA = new THREE.Quaternion(), _qB = new THREE.Quaternion(), _qC = new THREE.Quaternion();
 const _mA = new THREE.Matrix4();
 const _AXIS_Z = new THREE.Vector3(0, 0, 1);
+// 两骨 IK 专用临时量
+const _ikS = new THREE.Vector3(), _ikE = new THREE.Vector3(), _ikH = new THREE.Vector3(),
+  _ikE2 = new THREE.Vector3(), _ikH2 = new THREE.Vector3(),
+  _ik1 = new THREE.Vector3(), _ik2 = new THREE.Vector3(), _ik3 = new THREE.Vector3(),
+  _ikA = new THREE.Vector3(),
+  _ikWR = new THREE.Vector3(), _ikLW = new THREE.Vector3(),   // 左右手腕目标
+  _ikHT = new THREE.Vector3(),                                // 肘部 hint
+  _ikQW = new THREE.Quaternion(),                             // 枪朝向（世界）
+  _ikQ1 = new THREE.Quaternion(), _ikQ2 = new THREE.Quaternion(), _ikQP = new THREE.Quaternion();
 
 export class Character {
   constructor(scene) {
@@ -86,7 +97,7 @@ export class Character {
     this.weaponRoot.name = 'weaponRoot';
     this.root.add(this.weaponRoot);
 
-    const mk = (kind, obj, gripZ) => {
+    const mk = (kind, obj, gripZ, gripLocal, foreLocal) => {
       const g = new THREE.Group();
       g.name = 'weapon:' + kind;
       obj.position.z = -gripZ;      // 把握把点挪到原点
@@ -98,6 +109,10 @@ export class Character {
       muzzle.position.set(0, (bb.min.y + bb.max.y) / 2 + (bb.max.y - bb.min.y) * 0.15, bb.min.z);
       g.add(muzzle);
       g.userData.muzzle = muzzle;
+      // IK 握点：托底 z（枪托抵肩用）/ 握把点（右手）/ 护木点（左手），均为枪局部坐标
+      g.userData.buttZ = bb.max.z;
+      g.userData.grip = gripLocal || new THREE.Vector3(0, 0, 0);
+      g.userData.fore = foreLocal || new THREE.Vector3(0, (bb.min.y + bb.max.y) / 2 - 0.04, bb.min.z * 0.45);
       this.weaponRoot.add(g);
       return g;
     };
@@ -106,12 +121,17 @@ export class Character {
     const ri = instance('rifle');
     const rifle = ri ? ri.wrap : buildRifle({ hands: false, scale: 0.62 });
     this.weapons = this.weapons || {};
-    this.weapons.rifle = mk('rifle', rifle, ri ? 0 : 0.115 * 0.62);
+    this.weapons.rifle = mk('rifle', rifle, ri ? 0 : 0.115 * 0.62,
+      ri ? new THREE.Vector3(0, 0.05, 0.10)    // rifle.glb：握把中部（顶点扫描实测）
+         : new THREE.Vector3(0, -0.095 * 0.62, 0),
+      ri ? new THREE.Vector3(0, 0.11, -0.38)   // 护木下缘
+         : new THREE.Vector3(0, -0.03, -0.20));
 
     // 军刀
     const ki = instance('knife');
     const knife = ki ? ki.wrap : buildKnife({ hands: false, scale: 0.95 });
-    this.weapons.knife = mk('knife', knife, ki ? 0 : 0.05);
+    this.weapons.knife = mk('knife', knife, ki ? 0 : 0.05,
+      ki ? null : new THREE.Vector3(0, 0, 0.05));
 
     this.weaponRoot.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
     this.setWeapon(this.wep);
@@ -127,6 +147,7 @@ export class Character {
   weaponWorld() {
     const g = this.weapons && this.weapons[this.wep];
     if (!g) return null;
+    if (g.userData.grip) return g.localToWorld(g.userData.grip.clone());
     return g.getWorldPosition(new THREE.Vector3());
   }
 
@@ -163,11 +184,17 @@ export class Character {
     this.hand = findBone(this.model, /(mixamorig)?(right|r)[_ ]?hand|hand[_ ]?r\b|wrist[_ ]?r/i)
       || findBone(this.model, /hand/i);
     this.handName = this.hand ? this.hand.name : '(未找到手骨)';
-    // 上臂骨骼（左右）：_adjustArms 用来在腰射时把整条手臂往下压
-    this.armBones = [];
-    this.model.traverse((o) => {
-      if (o.isBone && /mixamorig(Right|Left)_?Arm$/i.test(o.name)) this.armBones.push(o);
-    });
+    // 双臂 IK 链（肩 UpperArm → 前臂 ForeArm → 手 Hand）：持枪时手直接解算到枪上
+    this.armsIK = [];
+    for (const side of ['Right', 'Left']) {
+      const arm = findBone(this.model, new RegExp('(mixamorig:?)?' + side + '_?Arm$', 'i'));
+      const fore = findBone(this.model, new RegExp('(mixamorig:?)?' + side + '_?ForeArm$', 'i'));
+      const handB = findBone(this.model, new RegExp('(mixamorig:?)?' + side + '_?Hand$', 'i'));
+      if (arm && fore && handB) this.armsIK.push({ side, arm, fore, hand: handB });
+    }
+    // 右肩骨（枪托抵肩锚点用）
+    const rChain = this.armsIK.find(c => c.side === 'Right');
+    this.shoulderR = rChain ? rChain.arm : null;
     this.play('idle', 0);
   }
 
@@ -344,55 +371,138 @@ export class Character {
         }
       }
       this.mixer.update(dt);
-      this._adjustArms(dt, st);   // 腰射时手臂下垂：持枪待机/行走动画手位太高，枪会顶到脖子
       // 有 drive 动画就交给动画，没有才用程序化坐姿兜底
       if (st.driving && !this.actions.drive) this._sitPose();
     } else this._posePlaceholder(dt, st);
 
     this.root.updateMatrixWorld(true);
-    this._poseWeapon(dt, st);
+    this._poseWeapon(dt, st);   // 先放枪：枪托抵肩窝，位置由肩骨驱动
+    this._poseArmsIK(dt, st);   // 再解双臂 IK：手精确握到握把/护木上
   }
 
-  // 腰射状态下把双臂往下压：Mixamo 持枪待机/行走的手位在胸口偏上（~1.4m），
-  // 加上 AK 枪身比握把高 ~0.2m，枪会顶到脖子。瞄准态不压（抵肩姿势本来就高）。
-  // 做法：mixer 更新完骨骼后，把"肩→肘方向"朝正下方旋转 armDrop 弧度（世界空间最短弧），
-  // 手、肘跟随下移，握枪姿势不变；每帧重算，与任何动画兼容。
-  _adjustArms(dt, st) {
-    if (this.mode !== 'glb' || !this.armBones || !this.armBones.length) return;
-    const want = st.aiming ? 0 : 0.6;             // 下压强度（弧度）
-    this.armDrop = (this.armDrop || 0) + (want - (this.armDrop || 0)) * Math.min(1, dt * 6);
-    if (this.armDrop < 0.01) return;
-    for (const bone of this.armBones) {
-      const elbow = bone.children[0];
-      if (!elbow) continue;
-      bone.updateWorldMatrix(true, false);
-      elbow.updateWorldMatrix(false, false);
-      const cur = elbow.getWorldPosition(_vA).sub(bone.getWorldPosition(_vB));
-      if (cur.lengthSq() < 1e-8) continue;
-      cur.normalize();
-      // 目标方向：当前方向朝正下方按比例收拢（nlerp）
-      const target = _vC.copy(cur).multiplyScalar(1 - this.armDrop).add(_vD.set(0, -1, 0).multiplyScalar(this.armDrop)).normalize();
-      _qB.setFromUnitVectors(cur, target);        // 世界空间修正旋转
-      bone.parent.getWorldQuaternion(_qA);        // parentWQ
-      _qC.copy(_qA).invert().multiply(_qB).multiply(_qA);  // 局部 = parent⁻¹·Δ·parent
-      bone.quaternion.premultiply(_qC);
+  // 世界空间旋转 → 骨骼局部（premultiply 共轭），与动画兼容
+  _applyWorldQuat(bone, q) {
+    bone.parent.getWorldQuaternion(_ikQP);
+    _ikQ2.copy(_ikQP).invert().multiply(q).multiply(_ikQP);
+    bone.quaternion.premultiply(_ikQ2);
+  }
+
+  // 两骨 IK：把 hand 解算到 target（世界坐标）；hint 决定肘部朝哪边弯
+  _ik2(chain, target, hint) {
+    const { arm, fore, hand, side } = chain;
+    // 骨长（世界单位，缓存）：骨骼局部 position 长度 × 累积缩放
+    if (!chain._l1) {
+      arm.getWorldScale(_ikA);
+      const s = _ikA.x;
+      chain._l1 = fore.position.length() * s;
+      chain._l2 = hand.position.length() * s;
+    }
+    const l1 = chain._l1, l2 = chain._l2;
+    arm.getWorldPosition(_ikS);
+    fore.getWorldPosition(_ikE);
+    hand.getWorldPosition(_ikH);
+    _ik1.subVectors(target, _ikS);
+    let d = _ik1.length();
+    if (d < 1e-4) return;
+    _ik1.divideScalar(d);                        // dirSW：肩→腕方向
+    d = Math.min(Math.max(d, Math.abs(l1 - l2) + 0.02), l1 + l2 - 0.02);
+    // 肘部新位置：S→W 连线上距肩 a 处，向 hint 方向偏 h（余弦定理）
+    const a = (l1 * l1 + d * d - l2 * l2) / (2 * d);
+    const h = Math.sqrt(Math.max(l1 * l1 - a * a, 1e-6));
+    _ik2.copy(_ikS).addScaledVector(_ik1, a);    // base
+    _ik3.subVectors(hint, _ik2);
+    _ik3.addScaledVector(_ik1, -_ik3.dot(_ik1)); // hint 投影到与肩腕轴垂直的平面
+    if (_ik3.lengthSq() < 1e-6) {
+      _ik3.set(side === 'Right' ? 1 : -1, -0.4, 0.1);
+      _ik3.addScaledVector(_ik1, -_ik3.dot(_ik1));
+    }
+    _ik3.normalize();
+    _ikE2.copy(_ik2).addScaledVector(_ik3, h);   // 新肘位置
+    // 旋转1：上臂把肘带到 E2（整条链跟随）
+    _ikA.subVectors(_ikE, _ikS).normalize();
+    _ikH2.subVectors(_ikE2, _ikS).normalize();
+    _ikQ1.setFromUnitVectors(_ikA, _ikH2);
+    this._applyWorldQuat(arm, _ikQ1);
+    // 修正后腕位置 = E2 + R1·(H-E)
+    _ikH2.subVectors(_ikH, _ikE).applyQuaternion(_ikQ1).add(_ikE2);
+    // 旋转2：前臂把腕带到目标
+    _ikA.subVectors(_ikH2, _ikE2).normalize();
+    _ik3.subVectors(target, _ikE2).normalize();
+    _ikQ1.setFromUnitVectors(_ikA, _ik3);
+    this._applyWorldQuat(fore, _ikQ1);
+  }
+
+  // 持枪双臂 IK：右手扣握把、左手托护木；军刀不启用（刀只有一个握点）
+  _poseArmsIK(dt, st) {
+    if (this.mode !== 'glb' || !this.armsIK || !this.armsIK.length) return;
+    const g = this.weapons && this.weapons[this.wep];
+    if (!g || !g.visible || !g.userData.grip || this.wep !== 'rifle') return;
+    g.updateWorldMatrix(true, false);
+    const qw = g.getWorldQuaternion(_ikQW);   // 枪朝向（世界）
+
+    // 右腕目标：握把点略后上（四指向前包握）
+    const gripW = g.localToWorld(_ikA.copy(g.userData.grip));
+    _ik1.set(0, 0, 1).applyQuaternion(qw);    // 枪托方向（后）
+    _ik2.set(0, 1, 0).applyQuaternion(qw);    // 枪上方向
+    _ikWR.copy(gripW).addScaledVector(_ik1, 0.045).addScaledVector(_ik2, 0.02);
+    // 左腕目标：护木点正下（手掌托底）
+    _ikLW.copy(g.userData.fore).add(_ik2.set(0, -0.02, 0));
+    g.localToWorld(_ikLW);
+
+    // 肘部 hint：root 局部外侧偏下 → 世界
+    const rootQ = this.root.getWorldQuaternion(_ikQP);
+    for (const chain of this.armsIK) {
+      _ikHT.set(chain.side === 'Right' ? 0.85 : -0.85, -0.45, 0.05).applyQuaternion(rootQ)
+        .add(chain.arm.getWorldPosition(_ikA));
+      this._ik2(chain, chain.side === 'Right' ? _ikWR : _ikLW, _ikHT);
+    }
+    // 手掌对齐：把"手腕→指根"方向转向枪口方向（手指沿枪横向后包握）
+    for (const chain of this.armsIK) {
+      const knuckle = chain.hand.children[0];
+      if (!knuckle || !knuckle.isBone) continue;
+      chain.hand.updateWorldMatrix(true, false);
+      knuckle.updateWorldMatrix(false, false);
+      _ik1.subVectors(knuckle.getWorldPosition(_ik2), chain.hand.getWorldPosition(_ik3));
+      if (_ik1.lengthSq() < 1e-8) continue;
+      _ik1.normalize();
+      _ik2.set(0, 0, 1).applyQuaternion(qw).negate();  // 期望：手指指向枪口
+      _ikQ1.setFromUnitVectors(_ik1, _ik2);
+      this._applyWorldQuat(chain.hand, _ikQ1);
     }
   }
 
-  // 武器每帧：位置跟随手 + 朝向按状态摆正（腰射斜持 / 抵肩瞄准 / 挥刀）
+  // 武器每帧：枪托抵肩窝（肩骨驱动，蹲/跑自动跟随）+ 朝向按状态摆正（腰射低姿 / 抵肩瞄准 / 挥刀）
   _poseWeapon(dt, st) {
     const w = this.weaponRoot;
     if (!w) return;
     const driving = !!st.driving;
     w.visible = !driving && !st.dead;
     if (!w.visible) return;
+    const g = this.weapons && this.weapons[this.wep];
+    if (!g) return;
 
-    // —— 位置：跟随手（世界 → root 局部）；瞄准时往下压 14cm，让枪托落进肩窝 ——
-    if (this.hand) this.hand.getWorldPosition(this.v3);
-    else this.v3.set(0.18, 1.25, -0.1);
-    this.root.worldToLocal(this.v3);
-    if (this.wep === 'rifle' && st.aiming) this.v3.y -= 0.14;
-    w.position.lerp(this.v3, Math.min(1, dt * 20));
+    // —— 位置锚：刀=右手骨（原点=握把，直接握在手里）；
+    //    枪=右肩骨 + 固定偏移 = 肩窝点（枪托落点）；无骨骼退化用默认值 ——
+    const isKnife = this.wep === 'knife' && !!this.hand;
+    if (isKnife) {
+      this.hand.getWorldPosition(this.v3);
+      this.root.worldToLocal(this.v3);
+      this.v3.y -= 0.03;   // 握把略低于腕骨
+      this.v3.z -= 0.02;   // 略靠掌心前
+    } else {
+      const anchorBone = this.shoulderR || this.hand;
+      if (anchorBone) anchorBone.getWorldPosition(this.v3);
+      else this.v3.set(0.18, 1.30, 0.02);
+      this.root.worldToLocal(this.v3);
+      this.v3.x -= 0.03;   // 内收
+      this.v3.y -= 0.07;   // 肩窝在肩关节下
+      this.v3.z -= 0.10;   // 略靠前
+      // 上仰瞄准时托底沿肩窝向后下滑，枪身贴脸颊外侧而不是横穿头部
+      const sp = Math.max(0, Math.sin((st.pitch || 0) * 0.5));
+      this.v3.y -= sp * 0.20;
+      this.v3.z += sp * 0.05;
+      this.v3.x += sp * 0.05;
+    }
 
     // —— 朝向：期望的"枪口方向"（root 局部：-Z 前，pitch 控制俯仰）——
     const t = performance.now() / 1000;
@@ -402,8 +512,9 @@ export class Character {
       pitch = st.slashT > 0 ? 0.1 : 0.5;      // 刀：斜持，挥砍时抬平
       roll = 0.55;
     } else {
-      // 枪：瞄准时跟随镜头俯仰（指哪打哪），腰射时枪口略下压
-      pitch = (st.aiming ? (st.pitch || 0) : -0.15) + sway * 0.4;
+      // 枪：瞄准时跟随镜头俯仰（视觉减半，避免大仰角时机匣横穿头部；
+      // 弹道不受影响——曳光弹始终从枪口连向准星），腰射时枪口下压 ~24°（低姿持枪）
+      pitch = (st.aiming ? (st.pitch || 0) * 0.5 : -0.42) + sway * 0.4;
     }
     // 目标世界朝向：局部 -Z→fwd、+Y→上；转成 root 局部四元数
     const rootQ = this.root.getWorldQuaternion(_qA);
@@ -416,6 +527,17 @@ export class Character {
     if (roll) _qB.multiply(_qC.setFromAxisAngle(_AXIS_Z, roll));
     _qA.invert().multiply(_qB);              // rootQ⁻¹ × 目标世界朝向 = root 局部朝向
     w.quaternion.slerp(_qA, Math.min(1, dt * 14));
+
+    // 枪托底落肩窝：枪原点 = 肩窝 + 枪口方向 × 托底距离（沿枪轴向后退到肩）；
+    // 刀原点=握把，直接落在手骨位置，不需要轴向补偿
+    if (isKnife) {
+      w.position.lerp(this.v3, Math.min(1, dt * 20));
+      return;
+    }
+    const buttZ = g.userData.buttZ || 0.42;
+    const fwdNow = _vA.set(0, 0, -1).applyQuaternion(w.quaternion);
+    const target = _vB.copy(this.v3).addScaledVector(fwdNow, buttZ);
+    w.position.lerp(target, Math.min(1, dt * 20));
   }
 
   _pickState(st, dt) {
@@ -464,8 +586,9 @@ export class Character {
     }
     if (st.aiming) {
       let k;
-      if (Math.abs(f) >= Math.abs(r)) k = f >= 0 ? 'walk' : 'walk_back';
+      if (Math.abs(f) >= Math.abs(r)) k = f >= 0 ? 'aimWalk' : 'walk_back';
       else k = r >= 0 ? 'strafe_r' : 'strafe_l';
+      // 前进优先用慢战术步行（aimWalk），没有再退回普通 walk
       this.play(has(k) ? k : 'walk', 0.14, false, true);
       return;
     }

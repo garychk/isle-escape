@@ -1,10 +1,10 @@
 // 结构物：索桥 / 沼泽木板路 / 山洞穹顶 / 救生筏 / 遇难残骸 / 林中木屋
 import * as THREE from 'three';
-import { CFG, RAFT, CABIN } from './config.js';
+import { CFG, RAFT, BOAT, CABIN } from './config.js';
 import { mulberry32 } from './util.js';
 import { baseHeight, surfaceRects, surfaceRamps } from './terrain.js';
 import { colliders } from './flora.js';
-import { barkTex, rockTex, woodGrain, sailTex } from './textures.js';
+import { barkTex, rockTex, woodGrain } from './textures.js';
 import { instance } from './assets.js';
 
 const rng = mulberry32(777);
@@ -15,7 +15,8 @@ const rockMat = new THREE.MeshStandardMaterial({ map: rockTex(), color: 0x8d8577
 
 export const bridgeState = { swayY: 0, rotZ: 0, t: 0 };
 export let bridgePlanks = null;
-export let raftGroup = null;
+export let boatGroup = null;
+let boatBaseY = 0.62;
 
 export function buildStructures(scene) {
   const g = new THREE.Group();
@@ -326,126 +327,59 @@ function buildCave(g) {
   }
 }
 
-// ================= 救生筏（终点） =================
+// ================= 军用快艇（终点，泊在北岸栈桥外侧） =================
 function buildRaft(g) {
-  raftGroup = new THREE.Group();
-  const WOOD = woodGrain(); const WOOD2 = woodGrain();
+  boatGroup = new THREE.Group();
+  const inst = instance('boat');
+  const WOOD = woodGrain();
   const logMat = new THREE.MeshStandardMaterial({ map: WOOD, color: 0x9d7b4f, roughness: 0.9 });
-  const logDark = new THREE.MeshStandardMaterial({ map: WOOD2, color: 0x6d5334, roughness: 0.95 });
-  const orange = new THREE.MeshStandardMaterial({ color: 0xb8492a, roughness: 0.62 });
-  const ropeMat = new THREE.MeshStandardMaterial({ color: 0x9a8660, roughness: 1 });
-  const SAIL = sailTex();
-  const sailMat = new THREE.MeshStandardMaterial({ map: SAIL, color: 0xe6e0cc, roughness: 0.92, side: THREE.DoubleSide });
-  const metalR = new THREE.MeshStandardMaterial({ color: 0x6e6a62, roughness: 0.55, metalness: 0.6 });
 
-  // —— 浮筒（救生筏两侧的橙色气囊 + 绑绳） ——
-  for (const s of [-1, 1]) {
-    const pon = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 3.5, 6, 12), orange);
-    pon.rotation.z = Math.PI / 2;
-    pon.position.set(0, 0.34, s * 1.35);
-    pon.castShadow = true;
-    raftGroup.add(pon);
-    // 绑绳：每 0.6m 一圈
-    for (let i = 0; i < 6; i++) {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.35, 0.022, 5, 12), ropeMat);
-      ring.position.set(-1.5 + i * 0.6, 0.34, s * 1.35);
-      ring.rotation.y = Math.PI / 2;
-      raftGroup.add(ring);
-    }
-  }
-  // —— 甲板：一排原木 ——
-  for (let i = 0; i < 7; i++) {
-    const lg = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 3.9, 9), i % 2 ? logMat : logDark);
-    lg.rotation.z = Math.PI / 2;
-    lg.position.set(0, 0.74, -1.2 + i * 0.4);
-    lg.castShadow = lg.receiveShadow = true;
-    raftGroup.add(lg);
-  }
-  // 横向压木（把原木捆在一起）
-  for (const px of [-1.5, 0, 1.5]) {
-    const tie = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 3.2, 7), logDark);
-    tie.rotation.x = Math.PI / 2; tie.position.set(px, 0.99, 0);
-    raftGroup.add(tie);
-  }
-  // —— 桅杆 + 横桁 + 帆 ——
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.105, 3.7, 8), logDark);
-  mast.position.set(-1.0, 2.45, 0); mast.castShadow = true;
-  raftGroup.add(mast);
-  const yard = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.9, 6), logDark);
-  yard.rotation.z = Math.PI / 2; yard.position.set(-0.35, 3.9, 0);
-  raftGroup.add(yard);
-  // 帆：带褶皱的曲面
-  const sailGeo = new THREE.PlaneGeometry(1.9, 1.5, 10, 8);
-  {
-    const sp = sailGeo.attributes.position;
-    for (let i = 0; i < sp.count; i++) {
-      const x = sp.getX(i), y = sp.getY(i);
-      sp.setZ(i, Math.sin(x * 4.2) * 0.055 + Math.cos(y * 3.1) * 0.04 + 0.16 * (1 - Math.abs(x) / 0.95));
-    }
-    sailGeo.computeVertexNormals();
-  }
-  const sail = new THREE.Mesh(sailGeo, sailMat);
-  sail.position.set(-0.2, 3.15, 0); sail.rotation.y = -0.22;
-  sail.castShadow = true;
-  raftGroup.add(sail);
-  // 桅顶旗
-  const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.55, 6, 3), new THREE.MeshStandardMaterial({ color: 0xc2371f, roughness: 0.85, side: THREE.DoubleSide }));
-  flag.position.set(-0.55, 4.15, 0); flag.rotation.y = 0.1;
-  raftGroup.add(flag);
-  // 索具
-  for (const [ax, ay, az, bx, by, bz] of [
-    [-1.0, 4.2, 0, -1.9, 1.0, 1.5], [-1.0, 4.2, 0, -1.9, 1.0, -1.5],
-    [-1.0, 4.2, 0, 1.6, 1.0, 0], [-1.0, 3.9, 0, 0.6, 3.9, 0],
-  ]) {
-    const a = new THREE.Vector3(ax, ay, az), b = new THREE.Vector3(bx, by, bz);
-    const len = a.distanceTo(b);
-    const r = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, len, 5), ropeMat);
-    r.position.copy(a).lerp(b, 0.5);
-    r.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
-    raftGroup.add(r);
-  }
-  // —— 补给箱 / 木桶 / 木桨 / 油灯 ——
-  const crate = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.62, 0.78), logMat);
-  crate.position.set(1.2, 1.5, -0.9); crate.rotation.y = 0.2;
-  crate.castShadow = true;
-  raftGroup.add(crate);
-  for (const yy of [-0.2, 0.2]) {
-    const band = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.05, 0.8), metalR);
-    band.position.set(1.2, 1.5 + yy, -0.9); band.rotation.y = 0.2;
-    raftGroup.add(band);
-  }
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.26, 0.6, 12), logDark);
-  barrel.position.set(1.05, 1.4, 0.35); barrel.rotation.z = 0.08;
-  raftGroup.add(barrel);
-  for (const yy of [-0.18, 0.18]) {
-    const hoop = new THREE.Mesh(new THREE.TorusGeometry(0.275, 0.022, 5, 14), metalR);
-    hoop.position.set(1.05, 1.4 + yy, 0.35); hoop.rotation.x = Math.PI / 2; hoop.rotation.z = 0.08;
-    raftGroup.add(hoop);
-  }
-  const oar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 2.3, 6), logDark);
-  oar.position.set(1.35, 1.05, 1.0); oar.rotation.set(1.32, 0.3, 0.42);
-  raftGroup.add(oar);
-  const bladeO = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.02, 0.44), logDark);
-  bladeO.position.set(1.95, 0.86, 1.55); bladeO.rotation.set(0.5, 0.3, 0.42);
-  raftGroup.add(bladeO);
-  // 油灯（夜里会亮）
-  const lantern = new THREE.Group();
-  const lBase = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.05, 8), metalR);
-  lBase.position.y = 0; lantern.add(lBase);
-  const glass = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.12, 8),
-    new THREE.MeshStandardMaterial({ color: 0xffd9a0, emissive: 0xffa63a, emissiveIntensity: 2.4, transparent: true, opacity: 0.85, roughness: 0.3 }));
-  glass.position.y = 0.09; lantern.add(glass);
-  const lTop = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.06, 8), metalR);
-  lTop.position.y = 0.17; lantern.add(lTop);
-  lantern.position.set(-1.55, 1.16, -0.5);
-  raftGroup.add(lantern);
-  const lampLight = new THREE.PointLight(0xffb057, 6, 11, 1.8);
-  lampLight.position.set(-1.55, 1.3, -0.5);
-  raftGroup.add(lampLight);
+  if (inst) {
+    // 外部快艇模型：船头朝 -Z（出海方向），原点=船中水线
+    const boat = inst.wrap;
+    boat.scale.setScalar(BOAT.scale);
+    boatGroup.add(boat);
 
-  raftGroup.position.set(RAFT.x, 0.62, RAFT.z - 1);
-  raftGroup.rotation.y = 0.35;
-  g.add(raftGroup);
+    // —— 甲板灯（夜里的定位灯）+ 补给箱 ——
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.48, 0.6), logMat);
+    crate.position.set(0.9, 1.32, 2.6); crate.rotation.y = 0.25;
+    crate.castShadow = true;
+    boatGroup.add(crate);
+    const lantern = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.07, 0.16, 8),
+      new THREE.MeshStandardMaterial({ color: 0xffd9a0, emissive: 0xffa63a, emissiveIntensity: 2.4, transparent: true, opacity: 0.85, roughness: 0.3 }));
+    lantern.position.set(-1.0, 1.5, 1.8);
+    boatGroup.add(lantern);
+    const lampLight = new THREE.PointLight(0xffb057, 6, 12, 1.8);
+    lampLight.position.set(-1.0, 1.7, 1.8);
+    boatGroup.add(lampLight);
+
+    // 泊位：栈桥外侧（jx=RAFT.x-2.4），船身纵轴贴桥，船头朝 -Z 出海
+    boatGroup.position.set(BOAT.x, BOAT.y, BOAT.z);
+    boatGroup.rotation.y = 0.07;            // 模型船头已是 -Z，加一点系泊偏角
+    boatGroup.rotation.z = 0.015;           // 轻微侧倾，更自然
+    boatBaseY = BOAT.y;
+  } else {
+    // 降级：简易木筏（无 boat.glb 时），沿用旧救生筏布局
+    console.warn('[structures] boat.glb 缺失，使用简易木筏');
+    const orange = new THREE.MeshStandardMaterial({ color: 0xb8492a, roughness: 0.62 });
+    for (const s of [-1, 1]) {
+      const pon = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 3.5, 6, 12), orange);
+      pon.rotation.z = Math.PI / 2;
+      pon.position.set(0, 0.34, s * 1.35);
+      boatGroup.add(pon);
+    }
+    for (let i = 0; i < 7; i++) {
+      const lg = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 3.9, 9), logMat);
+      lg.rotation.z = Math.PI / 2;
+      lg.position.set(0, 0.74, -1.2 + i * 0.4);
+      boatGroup.add(lg);
+    }
+    boatGroup.position.set(RAFT.x, 0.62, RAFT.z - 1);
+    boatGroup.rotation.y = 0.35;
+    boatBaseY = 0.62;
+  }
+  g.add(boatGroup);
 
   // 滩头木栈桥：从干沙一路伸进浅湾，架在木桩上
   const jetty = new THREE.Group();
@@ -475,10 +409,10 @@ function buildRaft(g) {
   g.add(jetty);
 }
 export function updateRaft(t) {
-  if (!raftGroup) return;
-  raftGroup.position.y = 0.62 + Math.sin(t * 0.9) * 0.08;
-  raftGroup.rotation.z = Math.sin(t * 0.7) * 0.025;
-  raftGroup.rotation.x = Math.sin(t * 0.53) * 0.012;
+  if (!boatGroup) return;
+  boatGroup.position.y = boatBaseY + Math.sin(t * 0.9) * 0.08;
+  boatGroup.rotation.z = 0.015 + Math.sin(t * 0.7) * 0.025;
+  boatGroup.rotation.x = Math.sin(t * 0.53) * 0.012;
 }
 
 // ================= 南岸遇难残骸 =================

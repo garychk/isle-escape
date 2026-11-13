@@ -118,7 +118,7 @@ const game = {
     ui.showHUD();
     resume();
     lockPointer();
-    ui.toast('向北穿过密林，在北岸找到救生筏');
+    ui.toast('向北穿过密林，在北岸登上快艇离岛');
     setTimeout(() => ui.toast('枪声会引来野兽——但也救你一命'), 4200);
   },
   pause() {

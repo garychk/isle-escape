@@ -8,6 +8,7 @@
 //   jeep.glb        越野车：车头朝 +Z，原点在四轮接地中心
 //   m151.glb        军用吉普（M151 MUTT）：车头朝 +Z，同上
 //   cabin.glb       木屋：门口朝 +Z，原点在地基中心
+//   boat.glb        军用快艇：船头朝 -Z，原点=船中水线（龙骨最低点）
 //
 // 单文件打包（npm run build）时，build.js 会把 assets/*.glb 转成 data URI 注入
 // globalThis.__ASSET_DATA__，因此 dist 版仍然是「一个 html 文件」，不需要服务器。
@@ -25,6 +26,9 @@ export const MANIFEST = {
   jeep:      { file: 'jeep.glb' },
   m151:      { file: 'm151.glb', length: 3.8 }, // 车长归一到 3.8m（Sketchfab 源模型单位偏大）
   cabin:     { file: 'cabin.glb' },
+  boat:      { file: 'boat.glb', anchor: 'origin' }, // 保持建模原点（船中水线），不居中不缩放
+  medkit:    { file: 'medkit.glb' }, // 急救箱拾取物：底部中心=原点，红十字盖朝上
+  croc:      { file: 'croc.glb' },  // 沼泽鳄：头朝 -Z，底部中心=原点，体长已烘焙 3.6m
 };
 
 const cache = new Map();

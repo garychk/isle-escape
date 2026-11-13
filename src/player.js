@@ -1,11 +1,12 @@
 // 玩家：第一人称控制 / 步枪 + 军刀 / 生命体力 / 拾取 / 受击与中毒
 import * as THREE from 'three';
-import { CFG, RAFT, PICKUPS } from './config.js';
+import { CFG, RAFT, BOAT, PICKUPS, POND, SWAMP } from './config.js';
 import { clamp, dist2 } from './util.js';
 import { groundHeight, zoneState } from './terrain.js';
 import { colliders } from './flora.js';
 import { sfx } from './audio.js';
 import { burst } from './animals.js';
+import { instance } from './assets.js';
 
 const V = new THREE.Vector3();
 
@@ -56,12 +57,23 @@ export class Player {
         const band = new THREE.Mesh(new THREE.BoxGeometry(0.57, 0.08, 0.37), redMat);
         g.add(band);
       } else {
-        const box = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.28, 0.42), medMat);
-        g.add(box);
-        const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.09, 0.1), redMat); c1.position.y = 0.15; g.add(c1);
-        const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.09, 0.3), redMat); c2.position.y = 0.15; g.add(c2);
+        // 急救箱：优先用外部 GLB 模型，缺失时退回程序化方块
+        const mk = instance('medkit');
+        if (mk) {
+          g.add(mk.wrap);
+        } else {
+          const box = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.28, 0.42), medMat);
+          g.add(box);
+          const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.09, 0.1), redMat); c1.position.y = 0.15; g.add(c1);
+          const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.09, 0.3), redMat); c2.position.y = 0.15; g.add(c2);
+        }
       }
-      g.position.set(x, groundHeight(x, z) + 0.35, z);
+      // 悬浮高度：地形之上；若点位落在水域（海/水塘/沼泽），则浮到水面之上，避免沉底
+      const gy = groundHeight(x, z);
+      let wy = CFG.SEA_Y;
+      if (dist2(x, z, POND.x, POND.z) < 52 && gy < CFG.POND_Y) wy = CFG.POND_Y;
+      if (dist2(x, z, SWAMP.x, SWAMP.z) < 66 && gy < CFG.SWAMP_Y) wy = CFG.SWAMP_Y;
+      g.position.set(x, Math.max(gy, wy) + 0.35, z);
       g.rotation.y = Math.random() * 6.28;
       scene.add(g);
       this.pickups.push({ x, z, type, mesh: g, taken: false });
@@ -337,7 +349,7 @@ export class Player {
       if (p.taken) continue;
       if (dist2(this.pos.x, this.pos.z, p.x, p.z) < 2.1) { near = p; break; }
     }
-    const raftD = dist2(this.pos.x, this.pos.z, RAFT.x, RAFT.z);
+    const boatD = dist2(this.pos.x, this.pos.z, BOAT.x, BOAT.z);
     if (near) {
       this.ui.prompt('E', near.type === 'ammo' ? '拾取弹药 (+30)' : '拾取急救包 (+40 生命)', () => {
         near.taken = true; near.mesh.visible = false; sfx.pickup();
@@ -352,7 +364,7 @@ export class Player {
         v.mount(this);
         sfx.uiclick();
       });
-    } else if (raftD < 4.2) {      this.ui.prompt('E', '登上救生筏 · 离开孤岛', () => {
+    } else if (boatD < 4.6) {      this.ui.prompt('E', '登上快艇 · 离开孤岛', () => {
         this.win = true;
         this.ui.onWin(this);
         sfx.win();

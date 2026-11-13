@@ -1,5 +1,5 @@
 // UI：HUD / 罗盘 / 菜单 / 设置 / 触屏控件
-import { RAFT, ZONES } from './config.js';
+import { BOAT, ZONES } from './config.js';
 import { clamp, fmtTime } from './util.js';
 import { sfx, setVolume } from './audio.js';
 
@@ -77,13 +77,13 @@ export class UI {
     const shift = wrapW / 2 - (heading + 180) * this.pxc;
     this.tape.style.transform = `translateX(${shift}px)`;
     // 目标方位角（北=0 顺时针）
-    const bearing = ((Math.atan2(RAFT.x - px, -(RAFT.z - pz)) * 180 / Math.PI) % 360 + 360) % 360;
+    const bearing = ((Math.atan2(BOAT.x - px, -(BOAT.z - pz)) * 180 / Math.PI) % 360 + 360) % 360;
     let rel = bearing - heading;
     while (rel > 180) rel -= 360; while (rel < -180) rel += 360;
     const clamped = clamp(rel, -78, 78);
     this.mark.style.transform = `translateX(${clamped * this.pxc}px)`;
     this.mark.style.opacity = Math.abs(rel) > 78 ? 0.4 : 1;
-    const d = Math.hypot(RAFT.x - px, RAFT.z - pz);
+    const d = Math.hypot(BOAT.x - px, BOAT.z - pz);
     this.markDist.textContent = Math.round(d) + 'm';
   }
 
