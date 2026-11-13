@@ -28,7 +28,7 @@ export const CFG = {
 // 地图关键点
 export const SPAWN = { x: 0, z: 205 };
 export const RAFT  = { x: 5, z: -218 };
-export const BOAT  = { x: 2.9, z: -220.8, y: -0.95, scale: 0.55 }; // 军用快艇（泊在栈桥外侧，船头朝海）
+export const BOAT  = { x: 2.9, z: -220.8, y: 0, scale: 0.55 }; // 渔船（泊在栈桥外，船头朝海；GLB 原点=船中水线，主甲板高 1.0）
 export const POND  = { x: -78, z: 62 };
 export const SWAMP = { x: 86, z: 52 };
 export const MOUNT = { x: 0, z: -120 };      // 山体（含洞穴）

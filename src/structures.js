@@ -327,7 +327,7 @@ function buildCave(g) {
   }
 }
 
-// ================= 军用快艇（终点，泊在北岸栈桥外侧） =================
+// ================= 渔船（终点，泊在北岸栈桥外侧） =================
 function buildRaft(g) {
   boatGroup = new THREE.Group();
   const inst = instance('boat');
@@ -335,23 +335,28 @@ function buildRaft(g) {
   const logMat = new THREE.MeshStandardMaterial({ map: WOOD, color: 0x9d7b4f, roughness: 0.9 });
 
   if (inst) {
-    // 外部快艇模型：船头朝 -Z（出海方向），原点=船中水线
+    // 渔船模型：船头朝 -Z（出海方向），原点=船中水线，主甲板局部高 1.0
     const boat = inst.wrap;
     boat.scale.setScalar(BOAT.scale);
     boatGroup.add(boat);
 
-    // —— 甲板灯（夜里的定位灯）+ 补给箱 ——
+    // —— 甲板可站立面：主甲板 y=1.0（栈桥 0.96 平齐跨上；水中 curY 低于 0.05 不会被吸附） ——
+    surfaceRects.push(
+      { x0: BOAT.x - 0.85, x1: BOAT.x + 0.85, z0: BOAT.z - 2.5, z1: BOAT.z + 4.3, y: 1.0 },
+    );
+
+    // —— 尾甲板补给箱 + 煤油灯（夜里的定位灯） ——
     const crate = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.48, 0.6), logMat);
-    crate.position.set(0.9, 1.32, 2.6); crate.rotation.y = 0.25;
+    crate.position.set(0.9, 1.25, 3.2); crate.rotation.y = 0.25;
     crate.castShadow = true;
     boatGroup.add(crate);
     const lantern = new THREE.Mesh(
       new THREE.CylinderGeometry(0.06, 0.07, 0.16, 8),
       new THREE.MeshStandardMaterial({ color: 0xffd9a0, emissive: 0xffa63a, emissiveIntensity: 2.4, transparent: true, opacity: 0.85, roughness: 0.3 }));
-    lantern.position.set(-1.0, 1.5, 1.8);
+    lantern.position.set(-0.9, 1.45, 2.8);
     boatGroup.add(lantern);
     const lampLight = new THREE.PointLight(0xffb057, 6, 12, 1.8);
-    lampLight.position.set(-1.0, 1.7, 1.8);
+    lampLight.position.set(-0.9, 1.65, 2.8);
     boatGroup.add(lampLight);
 
     // 泊位：栈桥外侧（jx=RAFT.x-2.4），船身纵轴贴桥，船头朝 -Z 出海
@@ -381,14 +386,15 @@ function buildRaft(g) {
   }
   g.add(boatGroup);
 
-  // 滩头木栈桥：从干沙一路伸进浅湾，架在木桩上
+  // 滩头木栈桥：从干沙一路伸进浅湾，架在木桩上（尾端压到渔船主甲板边缘，0.96→1.0 平齐登船）
   const jetty = new THREE.Group();
   const plankMat = new THREE.MeshStandardMaterial({ color: 0x9c8666, roughness: 0.95 });
-  const jx = RAFT.x - 2.4, jz0 = RAFT.z + 12.5, jz1 = RAFT.z + 2.2;
+  const jx = RAFT.x - 2.4, jz0 = RAFT.z + 12.5, jz1 = RAFT.z - 0.6;
   const jLen = jz0 - jz1;
-  for (let i = 0; i < 16; i++) {
-    const z = jz0 - i * (jLen / 15);
-    const pl = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.1, jLen / 15 * 0.62), plankMat);
+  const nPlanks = 20;
+  for (let i = 0; i < nPlanks; i++) {
+    const z = jz0 - i * (jLen / (nPlanks - 1));
+    const pl = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.1, jLen / (nPlanks - 1) * 0.62), plankMat);
     pl.position.set(jx + (i % 2 ? 0.025 : -0.025), 0.94 - i * 0.004, z);
     pl.rotation.y = (rng() - 0.5) * 0.03;
     pl.castShadow = pl.receiveShadow = true;

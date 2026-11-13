@@ -99,8 +99,8 @@ export function groundHeight(x, z, bridgeSway = 0, curY = Infinity) {
   if (Math.abs(x) < 2.6 && z < 16 && z > -28) h = CFG.BRIDGE_Y + bridgeSway;
   // 沼泽木板路
   else if (Math.abs(x - 86) < 2.4 && z < 96 && z > 10) h = Math.max(baseHeight(x, z), CFG.SWAMP_Y + 0.55);
-  // 北岸栈桥
-  else if (Math.abs(x - (RAFT.x - 2.4)) < 1.02 && z < RAFT.z + 12.6 && z > RAFT.z + 1.9) h = 0.96;
+  // 北岸栈桥（尾端压到渔船甲板边缘）
+  else if (Math.abs(x - (RAFT.x - 2.4)) < 1.02 && z < RAFT.z + 12.6 && z > RAFT.z - 1.0) h = 0.96;
   // 洞底
   if (inCaveCorr(x, z)) h = CFG.CAVE_Y + fbm(x * 0.05, z * 0.05, 2) * 0.4;
   // 结构物平台（木屋地板/门廊/楼梯等）

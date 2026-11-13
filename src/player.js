@@ -350,7 +350,7 @@ export class Player {
       }
     }
 
-    // —— 拾取 / 上筏提示 ——
+    // —— 拾取 / 登船提示 ——
     this.updateInteract();
     this.updateCam(dt, moving);
     this.updateLights();
@@ -379,7 +379,7 @@ export class Player {
         v.mount(this);
         sfx.uiclick();
       });
-    } else if (boatD < 4.6) {      this.ui.prompt('E', '登上快艇 · 离开孤岛', () => {
+    } else if (boatD < 4.6) {      this.ui.prompt('E', '登上渔船 · 离开孤岛', () => {
         this.win = true;
         this.ui.onWin(this);
         sfx.win();

@@ -8,7 +8,7 @@
 //   jeep.glb        越野车：车头朝 +Z，原点在四轮接地中心
 //   m151.glb        军用吉普（M151 MUTT）：车头朝 +Z，同上
 //   cabin.glb       木屋：门口朝 +Z，原点在地基中心
-//   boat.glb        军用快艇：船头朝 -Z，原点=船中水线（龙骨最低点）
+//   boat.glb        渔船（ABERDEEN 渔轮）：船头朝 -Z，原点=船中水线（吃水 1.46m 处），主甲板高 1.0
 //
 // 单文件打包（npm run build）时，build.js 会把 assets/*.glb 转成 data URI 注入
 // globalThis.__ASSET_DATA__，因此 dist 版仍然是「一个 html 文件」，不需要服务器。

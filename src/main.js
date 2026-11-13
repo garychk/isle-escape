@@ -118,7 +118,7 @@ const game = {
     ui.showHUD();
     resume();
     lockPointer();
-    ui.toast('向北穿过密林，在北岸登上快艇离岛');
+    ui.toast('向北穿过密林，在北岸登上渔船离岛');
     setTimeout(() => ui.toast('枪声会引来野兽——但也救你一命'), 4200);
   },
   pause() {
@@ -181,6 +181,11 @@ window.__qa = {
 // —— 输入 ——
 addEventListener('keydown', e => {
   if (!player) return;
+  // 设置面板打开时，ESC 优先关闭面板，再走暂停/恢复逻辑
+  if (e.code === 'Escape') {
+    const panel = document.getElementById('panel');
+    if (panel && !panel.hidden) { panel.hidden = true; return; }
+  }
   player.keys[e.code] = true;
   if (state !== 'playing') { if (e.code === 'Escape' && state === 'paused') game.resume(); return; }
   if (e.code === 'KeyQ') player.switchWep(player.wep === 'rifle' ? 'knife' : 'rifle');
