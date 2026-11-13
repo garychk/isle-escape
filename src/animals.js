@@ -144,7 +144,7 @@ function makeWolf() {
     if (!front) leg.rotation.x = -0.08;
     g.add(leg); legs.push(leg);
   }
-  return { group: g, legs, head, tail: tailBase, phase: rng() * 6.28 };
+  return { group: g, legs, head, tail: tailBase, phase: rng() * 6.28, face: -1 };
 }
 
 function makeBear() {
@@ -207,13 +207,13 @@ function makeBear() {
   }
   const tail = new THREE.Mesh(sph(0.1, 8, 6), furD);
   tail.scale.set(1, 0.9, 0.7); tail.position.set(0, 1.05, 1.32); g.add(tail);
-  return { group: g, legs, head, phase: rng() * 6.28 };
+  return { group: g, legs, head, phase: rng() * 6.28, face: -1 };
 }
 
 function makeCroc() {
   // 外部 croc.glb 优先（croc.fbx 转换）：静态网格，legs 留空即不做程序化腿摆动
   const ci = instance('croc');
-  if (ci) return { group: ci.wrap, legs: [], head: null, phase: rng() * 6.28 };
+  if (ci) return { group: ci.wrap, legs: [], head: null, phase: rng() * 6.28, face: 1 };
   const g = new THREE.Group();
   const skin = furMat(0x47542f, 0.72, SCALE_N), skinD = furMat(0x2f3a20, 0.7, SCALE_N), skinL = furMat(0x5f6c3c, 0.75, SCALE_N);
   // 躯干：扁长
@@ -286,10 +286,14 @@ function makeCroc() {
     leg.position.set(sx, 0.34, sz);
     g.add(leg); legs.push(leg);
   }
-  return { group: g, legs, head, tail: tailG, phase: rng() * 6.28 };
+  return { group: g, legs, head, tail: tailG, phase: rng() * 6.28, face: -1 };
 }
 
 function makeSpider() {
+  // 外部扫描模型优先（头朝 +Z=前进方向，原点=脚底中心）；无文件时降级程序化建模
+  const si = instance('spider');
+  if (si) return { group: si.wrap, legs: [], head: null, phase: rng() * 6.28, face: 1 };
+
   const g = new THREE.Group();
   const chitin = furMat(0x241d18, 0.55, SCALE_N), chitinD = furMat(0x151210, 0.5, SCALE_N);
   const abdomen = new THREE.Mesh(sph(0.54, 14, 10), chitin);
@@ -338,11 +342,11 @@ function makeSpider() {
       g.add(leg); legs.push(leg);
     }
   }
-  return { group: g, legs, head: ceph, phase: rng() * 6.28 };
+  return { group: g, legs, head: ceph, phase: rng() * 6.28, face: -1 };
 }
 
 const MAKERS = { wolf: makeWolf, bear: makeBear, croc: makeCroc, spider: makeSpider };
-const SCALES = { wolf: 1.14, bear: 1.0, croc: 1.0, spider: 1.15 };
+const SCALES = { wolf: 1.14, bear: 1.0, croc: 1.0, spider: 1.5 };
 
 // ---------------- 粒子（血液/水花） ----------------
 const PMAX = 240;
@@ -537,7 +541,8 @@ export class BeastManager {
         leg.rotation.x = sw * 0.6 * ph * (i < 2 ? 1 : -1) + (b.type === 'spider' ? Math.sin(b.animT * 2.7 + i) * 0.25 : 0);
       });
       b.group.position.set(b.x, b.y, b.z);
-      b.group.rotation.y = b.yaw;
+      // face=-1：程序化模型头朝 -Z，需补 π 才能面向移动方向；GLB 模型头朝 +Z 不用补
+      b.group.rotation.y = b.yaw + (b.face < 0 ? Math.PI : 0);
       // 身体起伏
       if (b.type !== 'spider') b.group.position.y += Math.abs(sw) * 0.06;
       else b.group.position.y += Math.sin(b.animT * 3) * 0.04;

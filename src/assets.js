@@ -28,7 +28,9 @@ export const MANIFEST = {
   cabin:     { file: 'cabin.glb' },
   boat:      { file: 'boat.glb', anchor: 'origin' }, // 保持建模原点（船中水线），不居中不缩放
   medkit:    { file: 'medkit.glb' }, // 急救箱拾取物：底部中心=原点，红十字盖朝上
-  croc:      { file: 'croc.glb' },  // 沼泽鳄：头朝 -Z，底部中心=原点，体长已烘焙 3.6m
+  croc:      { file: 'croc.glb' },  // 沼泽鳄：头朝 +Z（野兽 AI 前进方向），底部中心=原点，体长已烘焙 3.6m
+  spider:    { file: 'spider.glb' }, // 巨蛛：头朝 +Z（野兽前进方向），底部中心=原点
+  rock:      { file: 'rock.glb' },  // 岩石：底部中心=原点（植被/海滩石头共用），等比实例化
 };
 
 const cache = new Map();

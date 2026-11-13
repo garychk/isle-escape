@@ -20,9 +20,11 @@ size = hi - lo
 s = TARGET_LEN / max(size.x, size.y, size.z)
 print('[croc] 原始尺寸 (%.2f, %.2f, %.2f) -> 缩放 %.4f (体长 %.2fm)' % (size.x, size.y, size.z, s, TARGET_LEN))
 
-# M = Rx(-90°)(头 +Y -> -Z) × 缩放 × 平移(XZ 中心与底部到原点)
+# 源模型 Blender 空间：头 +Y、背 +Z（已趴伏）。
+# glTF 导出器自动做 Z-up→Y-up 转换 (x,y,z)→(x,z,-y)，只需 Rz(180°) 把头转到 -Y，
+# 转换后即 glTF 的头 +Z（野兽 AI 前进方向）、背 +Y。不要再叠 Rx，否则模型会立起来。
 cx, cz = (lo.x + hi.x) / 2, (lo.z + hi.z) / 2
-M = Matrix.Rotation(math.radians(-90), 4, 'X') \
+M = Matrix.Rotation(math.radians(180), 4, 'Z') \
   @ Matrix.Scale(s, 4) \
   @ Matrix.Translation((-cx, -lo.y, -cz))
 for o in made:

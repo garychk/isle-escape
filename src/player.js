@@ -36,6 +36,8 @@ export class Player {
 
     this.touchFire = false;
     this.aiming = false;
+    this.aimHold = false;   // 右键按住
+    this.aimLatch = false;  // V 键锁定（常驻瞄准）
     this.recoil = 0; this.kick = 0;
     this.win = false;
     this.finishT = 0;
@@ -196,9 +198,22 @@ export class Player {
   switchWep(w) {
     if (this.reloadT > 0 || w === this.wep) return;
     this.wep = w;
+    // 军刀没有抵肩瞄准姿态，切刀时解除锁定
+    if (w === 'knife' && this.aimLatch) { this.aimLatch = false; this.aiming = this.aimHold; }
     if (this.tps && this.tps.char) this.tps.char.setWeapon(w);
     sfx.uiclick();
     this.ui.updateWep(this);
+  }
+  /** 按住瞄准（右键）：与锁定状态取并集 */
+  setAimHold(v) {
+    this.aimHold = !!v;
+    this.aiming = this.aimHold || this.aimLatch;
+  }
+  /** 切换常驻瞄准（V 键）：不用一直按着右键 */
+  toggleAimLatch() {
+    this.aimLatch = !this.aimLatch;
+    this.aiming = this.aimHold || this.aimLatch;
+    return this.aimLatch;
   }
   toggleFlash() { this.flashOn = !this.flashOn; this.flash.intensity = this.flashOn ? 130 : 0; sfx.uiclick(); this.ui.toast(this.flashOn ? '枪灯已开启' : '枪灯已关闭'); }
 

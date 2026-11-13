@@ -4,8 +4,26 @@ import { CFG, TRAIL_W, SPAWN, RAFT, POND, SWAMP, CABIN } from './config.js';
 import { mulberry32, clamp, smoothstep, dist2 } from './util.js';
 import { baseHeight, inCaveCorr, trailDist } from './terrain.js';
 import { barkTex, barkNormal, rockTex, grassTex, fernTex, canopyTex, palmFrondTex, bigLeafTex, vineTex, litterTex } from './textures.js';
+import { instance } from './assets.js';
 
 export const colliders = []; // {x, z, r} 圆柱碰撞体
+
+// 外部岩石模型（rock.glb）：取几何体给 InstancedMesh 用，缺文件时返回 null（降级内置多面体）
+// 兜底：把几何包围盒烘焙成"底部中心=原点"，无论 GLB 里原点在哪都成立
+function rockAssetGeo() {
+  try {
+    const inst = instance('rock');
+    if (!inst) return null;
+    let g = null;
+    inst.wrap.traverse((o) => { if (!g && o.isMesh && o.geometry) g = o.geometry; });
+    if (!g) return null;
+    g = g.clone();
+    g.computeBoundingBox();
+    const b = g.boundingBox;
+    g.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+    return g;
+  } catch (e) { return null; }
+}
 
 const rng = mulberry32(20261112);
 const UP = new THREE.Object3D();
@@ -474,15 +492,22 @@ export function buildFlora(scene, quality = 1) {
   // ================= 9. 岩石 =================
   {
     const pts = scatter(Math.round(150 * quality));
-    const geo = jitterGeo(new THREE.DodecahedronGeometry(1, 0), 0.18);
+    const extGeo = rockAssetGeo(); // rock.glb：原点=底部中心，高≈0.6×宽
+    const geo = extGeo || jitterGeo(new THREE.DodecahedronGeometry(1, 0), 0.18);
     const mesh = new THREE.InstancedMesh(geo,
       new THREE.MeshStandardMaterial({ map: rockT, color: 0xffffff, roughness: 0.95 }), pts.length);
     const c = new THREE.Color();
     pts.forEach(([x, z], i) => {
       const y = baseHeight(x, z);
       const s = 0.5 + rng() * 2.2;
-      UP.position.set(x, y + s * 0.18, z);
-      UP.scale.set(s, s * (0.6 + rng() * 0.5), s);
+      if (extGeo) {
+        // 底部原点：贴地并稍微下埋，随机翻滚姿态
+        UP.position.set(x, y - s * 0.08, z);
+        UP.scale.set(s, s * (0.8 + rng() * 0.35), s * (0.85 + rng() * 0.3));
+      } else {
+        UP.position.set(x, y + s * 0.18, z);
+        UP.scale.set(s, s * (0.6 + rng() * 0.5), s);
+      }
       UP.rotation.set(rng() * 3, rng() * 6.28, rng() * 3);
       UP.updateMatrix();
       mesh.setMatrixAt(i, UP.matrix);
@@ -589,8 +614,9 @@ function buildBeachProps(parent, bark, rockT, grassT) {
   const drift = new THREE.InstancedMesh(
     new THREE.CylinderGeometry(0.16, 0.24, 1, 6).rotateZ(Math.PI / 2),
     new THREE.MeshStandardMaterial({ map: bark, color: 0xb0a084, roughness: 1 }), 70);
+  const pebGeo = rockAssetGeo();
   const pebble = new THREE.InstancedMesh(
-    new THREE.DodecahedronGeometry(1, 0),
+    pebGeo || new THREE.DodecahedronGeometry(1, 0),
     new THREE.MeshStandardMaterial({ map: rockT, color: 0xc8c0b0, roughness: 0.95 }), 90);
   const beachGrass = new THREE.InstancedMesh(
     mergeCross((() => { const q = new THREE.PlaneGeometry(1.0, 0.8); q.translate(0, 0.4, 0); return q; })()),
@@ -613,7 +639,8 @@ function buildBeachProps(parent, bark, rockT, grassT) {
       drift.setMatrixAt(di++, UP.matrix);
     } else if (pick < 0.5 && pi < 90) {
       const s = 0.1 + rng() * 0.34;
-      UP.position.set(x, h + s * 0.3, z); UP.scale.set(s, s * 0.7, s);
+      if (pebGeo) { UP.position.set(x, h - s * 0.15, z); UP.scale.set(s, s * (0.8 + rng() * 0.3), s); }
+      else { UP.position.set(x, h + s * 0.3, z); UP.scale.set(s, s * 0.7, s); }
       UP.rotation.set(rng() * 3, rng() * 6, rng() * 3); UP.updateMatrix();
       pebble.setMatrixAt(pi++, UP.matrix);
     } else if (gi < 320) {

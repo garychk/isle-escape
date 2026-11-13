@@ -188,6 +188,11 @@ addEventListener('keydown', e => {
   if (e.code === 'Digit2') player.switchWep('knife');
   if (e.code === 'KeyR') player.reload();
   if (e.code === 'KeyF') player.toggleFlash();
+  // 瞄准锁定：点一下常驻瞄准，不用一直按着右键
+  if (e.code === 'KeyV') {
+    const on = player.toggleAimLatch();
+    ui && ui.toast(on ? '瞄准锁定 · 开（V 取消）' : '瞄准锁定 · 关');
+  }
   if (e.code === 'KeyC') { player.isSneaking = !player.isSneaking; if (ui) ui.toast(player.isSneaking ? '蹲伏' : '站立'); }
   // 蹲伏时按空格 = 前滚翻
   if (e.code === 'Space' && player.isSneaking && player.onGround && !player.inVehicle) {
@@ -203,12 +208,13 @@ addEventListener('keyup', e => { if (player) player.keys[e.code] = false; });
 canvas.addEventListener('mousedown', e => {
   if (state !== 'playing') return;
   if (e.button === 0) player.keys['Mouse0'] = true;
-  if (e.button === 2) player.aiming = true;
+  if (e.button === 1) { e.preventDefault(); player.toggleAimLatch(); }  // 中键也能切换常驻瞄准
+  if (e.button === 2) player.setAimHold(true);
 });
 addEventListener('mouseup', e => {
   if (!player) return;
   if (e.button === 0) player.keys['Mouse0'] = false;
-  if (e.button === 2) player.aiming = false;
+  if (e.button === 2) player.setAimHold(false);
 });
 addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('mousemove', e => {
