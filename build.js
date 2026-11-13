@@ -20,30 +20,59 @@ execFileSync(process.execPath, [esbuild,
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const js = fs.readFileSync(path.join(root, 'bundle.js'), 'utf8');
 
-// —— 把 assets/*.glb 内联成 data URI，保证 dist 仍是单文件（无需服务器） ——
+// —— 资产：多文件模式直接拷贝；--single 模式才内联成 data URI ——
 const KNOWN = ['player', 'robot', 'rifle', 'knife', 'jeep', 'm151', 'cabin', 'medkit', 'boat', 'rock', 'dino', 'mutant', 'wolf', 'stump', 'zombie'];
+const single = process.argv.includes('--single');
 const assetData = {};
-if (!process.argv.includes('--no-assets')) {
+const audioData = {};
+if (single) {
   const dir = path.join(root, 'assets');
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
-      if (!f.endsWith('.glb')) continue;
-      const name = f.slice(0, -4);
-      if (!KNOWN.includes(name)) continue;
-      assetData[name] = 'data:model/gltf-binary;base64,' +
-        fs.readFileSync(path.join(dir, f)).toString('base64');
+      if (f.endsWith('.glb')) {
+        const name = f.slice(0, -4);
+        if (!KNOWN.includes(name)) continue;
+        assetData[name] = 'data:model/gltf-binary;base64,' +
+          fs.readFileSync(path.join(dir, f)).toString('base64');
+      } else if (f.endsWith('.ogg')) {
+        audioData[f] = 'data:audio/ogg;base64,' + fs.readFileSync(path.join(dir, f)).toString('base64');
+      }
     }
   }
 }
-const assetScript = Object.keys(assetData).length
-  ? `<script>window.__ASSET_DATA__=${JSON.stringify(assetData)}</script>\n`
+const assetScript = single
+  ? `<script>window.__ASSET_DATA__=${JSON.stringify(assetData)};window.__AUDIO_DATA__=${JSON.stringify(audioData)}</script>\n`
   : '';
 
-const out = html
-  .replace(/<script type="importmap">[\s\S]*?<\/script>\s*/m, '')
-  .replace(/<script type="module" src="\.\/src\/main\.js"><\/script>/m, () => assetScript + `<script>\n${js}\n</script>`);
+const stripImportMap = html.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/m, '');
 
 const dist = path.join(root, 'dist');
 if (!fs.existsSync(dist)) fs.mkdirSync(dist);
-fs.writeFileSync(path.join(dist, 'isle-escape.html'), out);
-console.log('written:', path.join(dist, 'isle-escape.html'), (out.length / 1024 / 1024).toFixed(2) + ' MB');
+
+if (!single) {
+  // —— 多文件模式：dist/ = index.html + bundle.js + assets/（可读性/可扩展性优先） ——
+  const outMulti = stripImportMap.replace(
+    /<script type="module" src="\.\/src\/main\.js"><\/script>/m,
+    '<script src="bundle.js"></script>'
+  );
+  fs.writeFileSync(path.join(dist, 'index.html'), outMulti);
+  fs.writeFileSync(path.join(dist, 'bundle.js'), js);
+  const adir = path.join(dist, 'assets');
+  if (!fs.existsSync(adir)) fs.mkdirSync(adir);
+  const sdir = path.join(root, 'assets');
+  let copied = 0, bytes = 0;
+  for (const f of fs.readdirSync(sdir)) {
+    if (!/\.(glb|ogg|mp3)$/.test(f)) continue;
+    fs.copyFileSync(path.join(sdir, f), path.join(adir, f));
+    copied++; bytes += fs.statSync(path.join(sdir, f)).size;
+  }
+  console.log(`written: ${dist} (index.html + bundle.js + ${copied} 个资产文件, ${(bytes / 1024 / 1024).toFixed(1)} MB)`);
+  console.log('启动: node serve.mjs  →  http://localhost:8137/');
+} else {
+  const out = stripImportMap.replace(
+    /<script type="module" src="\.\/src\/main\.js"><\/script>/m,
+    () => assetScript + `<script>\n${js}\n</script>`
+  );
+  fs.writeFileSync(path.join(dist, 'isle-escape.html'), out);
+  console.log('written:', path.join(dist, 'isle-escape.html'), (out.length / 1024 / 1024).toFixed(2) + ' MB');
+}

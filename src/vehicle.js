@@ -4,6 +4,7 @@ import { instance } from './assets.js';
 import { groundHeight } from './terrain.js';
 import { colliders } from './flora.js';
 import { dist2, clamp } from './util.js';
+import { sfx, engineStart, engineUpdate, engineStop, ignitionStart } from './audio.js';
 
 const SPEC = {
   jeep:      { max: 17, accel: 8.5, brake: 16, drag: 2.6, turn: 1.35, seat: [0, 0.22, 0.15], radius: 1.16, name: '越野车' },
@@ -49,6 +50,8 @@ export class Vehicle {
     this.driver = player;
     player.inVehicle = this;
     this.speed = 0;
+    // 上车：关门 + 点火（真文件：马达→拉起→怠速，尾段交叉接合成引擎）
+    sfx.door(); ignitionStart(() => engineStart());
     return true;
   }
 
@@ -63,6 +66,8 @@ export class Vehicle {
     player.velY = 0;
     player.onGround = true;
     this.speed = 0;
+    engineStop();
+    sfx.door();
   }
 
   /** 驾驶输入：throttle ∈ [-1,1]，steer ∈ [-1,1] */
@@ -115,6 +120,8 @@ export class Vehicle {
       const off = new THREE.Vector3(s[0], s[1], s[2]).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
       this.driver.pos.set(this.pos.x + off.x, this.pos.y + off.y, this.pos.z + off.z);
       this.driver.yaw = this.yaw + Math.PI;
+      // 引擎声随车速变调（撞树掉速、手刹也跟着变化）
+      engineUpdate(Math.abs(this.speed) / S.max);
     }
   }
 }

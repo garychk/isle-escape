@@ -10,7 +10,7 @@ import { Player } from './player.js';
 import { UI } from './ui.js';
 import { TPS } from './tps.js';
 import { loadAssets, setAssetEnv } from './assets.js';
-import { resume, startAmbient, setCaveAmbience, setRain, thunder, sfx } from './audio.js';
+import { resume, startAmbient, startBGM, setCombat, setCaveAmbience, setRain, thunder, sfx, bgmState, sfxState, engineState } from './audio.js';
 import { clamp } from './util.js';
 
 const canvas = document.getElementById('view');
@@ -99,6 +99,7 @@ async function boot() {
   beasts.onSfx = (name, x, z) => { const s = sfx[name]; s && s(); };
   await step('准备出发', 100);
   startAmbient();
+  startBGM();
   document.getElementById('boot').classList.add('done');
   ui.showMenu('menu-title');
   if (location.search.indexOf('auto=1') >= 0) {
@@ -176,6 +177,10 @@ window.__qa = {
     }
   },
   state: () => state,
+  bgm: bgmState,
+  sfx: sfxState,
+  engine: engineState,
+  setCombat,
 };
 
 // —— 输入 ——
@@ -238,6 +243,7 @@ addEventListener('resize', () => {
 // —— 主循环 ——
 let lastT = performance.now();
 let caveBlend = 0;
+let lastCombatT = -99;
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
@@ -270,6 +276,12 @@ function loop() {
     ui.checkZones(player.pos.x, player.pos.z);
     ui.updateCompass(player.yaw, player.pos.x, player.pos.z);
     setCaveAmbience(zone.cave);
+    // BGM 战斗切换：有任一活兽处于 aggro 即视为遭遇战；脱离后延迟 5s 回探索层
+    if (beasts) {
+      const fighting = beasts.beasts.some(b => b.aggro && b.state !== 'dead');
+      if (fighting) lastCombatT = playTime;
+      setCombat(fighting || (playTime - lastCombatT) < 5);
+    }
     // 洞穴压暗
     caveBlend += ((zone.cave ? 1 : 0) - caveBlend) * dt * 3;
     if (ui.updateAlmanac) ui.updateAlmanac(env);

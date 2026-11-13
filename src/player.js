@@ -376,8 +376,7 @@ export class Player {
     } else if (this.vehicles && (this._nearVeh = this.vehicles.find(v => !v.driver && v.near(this.pos.x, this.pos.z, 3.6)))) {
       const v = this._nearVeh;
       this.ui.prompt('E', '驾驶 · ' + v.name, () => {
-        v.mount(this);
-        sfx.uiclick();
+        v.mount(this); // mount 内含关门/点火音效
       });
     } else if (boatD < 4.6) {      this.ui.prompt('E', '登上渔船 · 离开孤岛', () => {
         this.win = true;
