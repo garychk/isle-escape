@@ -1,0 +1,13 @@
+{
+  "name": "isle-escape",
+  "version": "1.0.0",
+  "private": true,
+  "description": "绝岛密林 · Isle Escape — Three.js 网页端第三人称生存逃脱游戏",
+  "scripts": {
+    "build": "node build.js",
+    "build:single": "node build.js --single",
+    "serve": "node serve.mjs",
+    "start": "node serve.mjs",
+    "dev": "node serve.mjs"
+  }
+}

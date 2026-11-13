@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const PORT = 8137;
+const argPort = process.argv.includes('--port') ? Number(process.argv[process.argv.indexOf('--port') + 1]) : 0;
+const PORT = argPort || Number(process.env.PORT) || 8137;
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
@@ -34,6 +35,15 @@ const server = createServer(async (req, res) => {
   } catch (e) {
     res.writeHead(500); res.end('500 ' + e.message);
   }
+});
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.error(`\n[错误] 端口 ${PORT} 已被占用——多半是服务器已经在跑了。`);
+    console.error(`  直接打开 http://localhost:${PORT}/ 即可游玩。`);
+    console.error(`  要换端口启动：npm run serve -- --port 8138  或  PORT=8138 node serve.mjs\n`);
+    process.exit(1);
+  }
+  throw e;
 });
 server.listen(PORT, () => {
   console.log('isle-escape 本地服务器已启动');
