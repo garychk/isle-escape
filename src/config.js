@@ -63,18 +63,21 @@ export const PICKUPS = [
 export const BEAST_SPAWNS = [
   ['wolf', -50, 130, 3], ['wolf', 40, 95, 2], ['wolf', -60, -30, 2],
   ['bear', -78, 96, 1],                       // 水塘边的棕熊
-  ['croc', 86, 40, 1], ['croc', 66, 62, 1],   // 沼泽鳄
-  ['spider', 0, -78, 2], ['spider', 0, -118, 2], ['spider', 0, -152, 1], // 洞内巨蛛
-  ['dino', 30, 125, 2],                       // 密林深处的迅猛龙
+  ['dino', 30, 125, 2],                       // 密林深处的变异恐龙
+  // 山洞守卫（走廊 x∈±9, z -50..-172）：spawnAll 有 ±7 抖动，出生点取 x=0 才不会抖出洞壁
+  ['zombie', 0, -85, 2], ['zombie', 0, -115, 2], ['zombie', 0, -145, 2], ['zombie', 0, -168, 1],
 ];
 
 // 野兽数值
 export const BEASTS = {
-  wolf:   { hp: 70,  spd: 7.2, dmg: 14, atkR: 1.9, atkCd: 1.1, hear: 70, name: '林狼' },
-  bear:   { hp: 260, spd: 6.4, dmg: 34, atkR: 2.6, atkCd: 1.8, hear: 60, name: '突变巨兽' }, // mutant.glb（原棕熊槽位）
-  croc:   { hp: 150, spd: 5.2, dmg: 30, atkR: 2.3, atkCd: 2.0, hear: 40, name: '沼泽鳄' },
-  spider: { hp: 55,  spd: 6.0, dmg: 10, atkR: 1.8, atkCd: 1.2, hear: 55, name: '巨蛛', venom: true },
-  dino:   { hp: 120, spd: 8.2, dmg: 22, atkR: 2.2, atkCd: 1.3, hear: 65, name: '迅猛龙' }, // 快但脆
+  // 注：带骨骼行走动画的兽（wolf/bear/dino），spd 就是"走路节奏"的限速器：
+  // animals.js 用 spd ÷ 动画原生步速(walkSpeed，实测值 1.30/1.60/1.40) 实时匹配播放速率，
+  // 脚掌踩实地面不打滑。这里统一取原生步速的 1.1–1.25 倍 —— 走起来还是"走路"的节奏，
+  // 不会出现快放录像那种腿踩缝纫机、身体却平移的假动作。
+  wolf:   { hp: 70,  spd: 1.50, dmg: 14, atkR: 1.9, atkCd: 1.1, hear: 70, name: '行尸' }, // wolf.glb（原林狼槽位），丧尸式蹒跚
+  bear:   { hp: 260, spd: 1.75, dmg: 34, atkR: 2.6, atkCd: 1.8, hear: 60, name: '突变巨兽' }, // mutant.glb（原棕熊槽位），沉重踏步
+  dino:   { hp: 120, spd: 1.75, dmg: 22, atkR: 2.2, atkCd: 1.3, hear: 65, name: '变异恐龙' }, // 双足驼背暴徒；dino.glb 含 idle/walk/swipe
+  zombie: { hp: 45,  spd: 0.80, dmg: 8,  atkR: 1.7, atkCd: 1.4, hear: 45, name: '洞窟僵尸' }, // 小怪：zombie.glb（兜帽平民），拖沓踱步、挥棒轻击
 };
 
 // 区域名卡（进入区域时展示）

@@ -28,12 +28,12 @@ export const MANIFEST = {
   cabin:     { file: 'cabin.glb' },
   boat:      { file: 'boat.glb', anchor: 'origin' }, // 保持建模原点（船中水线），不居中不缩放
   medkit:    { file: 'medkit.glb' }, // 急救箱拾取物：底部中心=原点，红十字盖朝上
-  croc:      { file: 'croc.glb' },  // 沼泽鳄：头朝 +Z（野兽 AI 前进方向），底部中心=原点，体长已烘焙 3.6m
-  spider:    { file: 'spider.glb' }, // 巨蛛：头朝 +Z（野兽前进方向），底部中心=原点
-  dino:      { file: 'dino.glb' },  // 迅猛龙：头朝 +Z（野兽 AI 前进方向），底部中心=原点，体长已烘焙 2.6m
-  wolf:      { file: 'wolf.glb' },  // 林狼：头朝 +Z（野兽 AI 前进方向），底部中心=原点，体长已烘焙 1.9m
+  stump:     { file: 'stump.glb' }, // 破树根（断桩）：底部中心=原点，高 0.95m、根须横展 ~2.3m，自带 PBR 贴图
+  dino:      { file: 'dino.glb', height: 2.2 }, // 变异暴徒：头朝 +Z（野兽 AI 前进方向），含 idle/walk/swipe 三段骨骼动画
+  wolf:      { file: 'wolf.glb', height: 1.8 }, // 行尸（替狼）：人形 Prisoner，头朝 +Z（野兽 AI 前进方向），含 idle/walk 骨骼动画
   rock:      { file: 'rock.glb' },  // 岩石：底部中心=原点（植被/海滩石头共用），等比实例化
   mutant:    { file: 'mutant.glb', height: 2.4 }, // 变异巨兽（替熊）：头朝 +Z，含 idle/swipe 两段骨骼动画
+  zombie:    { file: 'zombie.glb', height: 1.4 }, // 洞窟僵尸（小怪）：头朝 +Z，含 idle/walk/swipe 三段骨骼动画
 };
 
 const cache = new Map();

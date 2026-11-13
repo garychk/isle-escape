@@ -25,6 +25,24 @@ function rockAssetGeo() {
   } catch (e) { return null; }
 }
 
+// 外部破树根（stump.glb）：几何 + 自带 PBR 贴图材质，缺文件返回 null（跳过不放置）
+function stumpAsset() {
+  try {
+    const inst = instance('stump');
+    if (!inst) return null;
+    let geo = null, mat = null;
+    inst.wrap.traverse((o) => {
+      if (o.isMesh && o.geometry && !geo) { geo = o.geometry; mat = o.material; }
+    });
+    if (!geo) return null;
+    geo = geo.clone();
+    geo.computeBoundingBox();
+    const b = geo.boundingBox;
+    geo.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+    return { geo, mat };
+  } catch (e) { return null; }
+}
+
 const rng = mulberry32(20261112);
 const UP = new THREE.Object3D();
 const YAX = new THREE.Vector3(0, 1, 0);
@@ -540,6 +558,28 @@ export function buildFlora(scene, quality = 1) {
     mesh.castShadow = soft;
     mesh.receiveShadow = true;
     group.add(mesh);
+  }
+
+  // ================= 11. 破树根（断桩） =================
+  {
+    const sa = stumpAsset();
+    if (sa) {
+      const pts = scatter(Math.round(34 * quality), { nearTrail: true });
+      const mesh = new THREE.InstancedMesh(sa.geo, sa.mat, pts.length);
+      pts.forEach(([x, z], i) => {
+        const y = baseHeight(x, z);
+        const s = 0.65 + rng() * 1.05;
+        UP.position.set(x, y - 0.03 * s, z);   // 根须稍微下埋一点，贴合地形
+        UP.scale.set(s, s * (0.9 + rng() * 0.3), s);
+        UP.rotation.set((rng() - 0.5) * 0.1, rng() * 6.28, (rng() - 0.5) * 0.1);
+        UP.updateMatrix();
+        mesh.setMatrixAt(i, UP.matrix);
+        if (s > 0.85) colliders.push({ x, z, r: s * 0.85 });
+      });
+      mesh.castShadow = soft;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    }
   }
 
   buildSwamp(group, bark, soft);

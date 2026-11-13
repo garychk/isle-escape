@@ -105,7 +105,10 @@ s = TARGET_LEN / max(size.x, size.y, size.z)
 print('[wolf] 原始尺寸 (%.2f, %.2f, %.2f) -> 缩放 %.4f (体长 %.1fm)' % (size.x, size.y, size.z, s, TARGET_LEN))
 
 cx, cy = (lo.x + hi.x) / 2, (lo.y + hi.y) / 2
+# 动画评估空间相对绑定空间绕体轴翻转了 180°（动画帧头在 +Y、背朝 -Z）：
+# Ry(180°) 翻回背朝 +Z，再 Rz(180°) 把头从 +Y 转到 -Y（导出转换后 = glTF +Z 前进方向）
 M = Matrix.Rotation(math.radians(180), 4, 'Z') \
+  @ Matrix.Rotation(math.radians(180), 4, 'Y') \
   @ Matrix.Scale(s, 4) \
   @ Matrix.Translation((-cx, -cy, -lo.z))
 for o in meshes:

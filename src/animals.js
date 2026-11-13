@@ -57,9 +57,25 @@ function eyeMesh(r, color, glow, glowI = 1.2) {
 }
 
 function makeWolf() {
-  // 外部 wolf.glb 优先（头朝 +Z=前进方向，底部中心=原点）；缺文件时程序化林狼兜底
+  // 外部 wolf.glb 优先（行尸：人形 Prisoner，含 idle/walk 骨骼动画，头朝 +Z=前进方向）
+  // 缺文件时程序化林狼兜底
   const wi = instance('wolf');
-  if (wi) return { group: wi.wrap, legs: [], head: null, phase: rng() * 6.28, face: 1 };
+  if (wi) {
+    const mixer = new THREE.AnimationMixer(wi.wrap);
+    const byName = (re, fb) => wi.animations.find(c => re.test(c.name)) || wi.animations[fb] || null;
+    const idleClip = byName(/^idle/i, 0);
+    const walkClip = byName(/^walk/i, 1);
+    const actions = {};
+    if (idleClip) { actions.idle = mixer.clipAction(idleClip); actions.idle.play(); }
+    if (walkClip) actions.walk = mixer.clipAction(walkClip);
+    return {
+      group: wi.wrap, legs: [], head: null, phase: rng() * 6.28, face: 1,
+      mixer, actions, anim: 'idle', swipeDur: null,
+      // 原生步速（m/s，已按身高归一折算）：1 倍速播放时脚掌正好贴地不打滑
+      // 原生步速（m/s，实测：支撑相脚掌相对根节点的后移速度）——1 倍速播放时脚掌正好贴地
+      walkSpeed: 1.30,
+    };
+  }
   const g = new THREE.Group();
   const fur = furMat(0x6e675c), furD = furMat(0x453f37), furL = furMat(0x8b8274), belly = furMat(0x9a9082);
   const noseM = mat(0x1b1613, 0.35);
@@ -158,14 +174,17 @@ function makeBear() {
     const mixer = new THREE.AnimationMixer(mi.wrap);
     const byName = (re, fb) => mi.animations.find(c => re.test(c.name)) || mi.animations[fb] || null;
     const idleClip = byName(/^idle/i, 0);
-    const swipeClip = byName(/^swip/i, 1);
+    const walkClip = byName(/^walk/i, 1);
+    const swipeClip = byName(/^swip/i, 2);
     const actions = {};
     if (idleClip) { actions.idle = mixer.clipAction(idleClip); actions.idle.play(); }
+    if (walkClip) { actions.walk = mixer.clipAction(walkClip); }
     if (swipeClip) { actions.swipe = mixer.clipAction(swipeClip); }
     return {
       group: mi.wrap, legs: [], head: null, phase: rng() * 6.28, face: 1,
       mixer, actions, anim: 'idle',
       swipeDur: swipeClip ? swipeClip.duration : 1.0,
+      walkSpeed: 1.60, // 原生步速（m/s，实测支撑相脚速）：1 倍速时脚掌正好贴地
     };
   }
   const g = new THREE.Group();
@@ -230,145 +249,28 @@ function makeBear() {
   return { group: g, legs, head, phase: rng() * 6.28, face: -1 };
 }
 
-function makeCroc() {
-  // 外部 croc.glb 优先（croc.fbx 转换）：静态网格，legs 留空即不做程序化腿摆动
-  const ci = instance('croc');
-  if (ci) return { group: ci.wrap, legs: [], head: null, phase: rng() * 6.28, face: 1 };
-  const g = new THREE.Group();
-  const skin = furMat(0x47542f, 0.72, SCALE_N), skinD = furMat(0x2f3a20, 0.7, SCALE_N), skinL = furMat(0x5f6c3c, 0.75, SCALE_N);
-  // 躯干：扁长
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 1.5, 6, 10), skin);
-  body.rotation.x = Math.PI / 2; body.scale.set(1, 1, 0.62); body.position.set(0, 0.36, 0.12); g.add(body);
-  const belly = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 1.3, 5, 9), skinL);
-  belly.rotation.x = Math.PI / 2; belly.scale.set(0.95, 1, 0.42); belly.position.set(0, 0.25, 0.12); g.add(belly);
-  // 颈与头
-  const neck = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.3, 5, 9), skin);
-  neck.rotation.x = Math.PI / 2; neck.scale.set(1, 1, 0.6); neck.position.set(0, 0.34, -0.95); g.add(neck);
-  const head = new THREE.Mesh(new THREE.CapsuleGeometry(0.19, 0.34, 5, 9), skin);
-  head.rotation.x = Math.PI / 2; head.scale.set(1.05, 1, 0.55); head.position.set(0, 0.32, -1.32); g.add(head);
-  // 长吻
-  const snout = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.155, 0.62, 10), skinD);
-  snout.rotation.x = Math.PI / 2; snout.scale.set(1, 1, 0.5); snout.position.set(0, 0.3, -1.78); g.add(snout);
-  // 下颚
-  const jaw = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.14, 0.6, 8), skinL);
-  jaw.rotation.x = Math.PI / 2; jaw.scale.set(1, 1, 0.34); jaw.position.set(0, 0.2, -1.78); g.add(jaw);
-  // 齿列（上/下各 7 颗）
-  for (let i = 0; i < 7; i++) {
-    const z = -2.02 + i * 0.085;
-    const w = 0.075 + i * 0.008;
-    for (const sgn of [-1, 1]) {
-      const t1 = new THREE.Mesh(new THREE.ConeGeometry(0.014, 0.06, 4), mat(0xe8e2cc, 0.4));
-      t1.position.set(sgn * w, 0.245, z); t1.rotation.x = Math.PI; g.add(t1);
-      const t2 = new THREE.Mesh(new THREE.ConeGeometry(0.013, 0.05, 4), mat(0xe8e2cc, 0.4));
-      t2.position.set(sgn * w, 0.24, z + 0.04); g.add(t2);
-    }
-  }
-  const nose = new THREE.Mesh(sph(0.06, 8, 6), skinD);
-  nose.scale.set(1.4, 0.6, 1); nose.position.set(0, 0.305, -2.06); g.add(nose);
-  for (const sgn of [-1, 1]) {
-    const eye = eyeMesh(0.05, 0xe8d48a, 0xd8a020, 1.6);
-    eye.position.set(sgn * 0.13, 0.46, -1.36); g.add(eye);
-    // 眉骨
-    const ridge = new THREE.Mesh(sph(0.075, 8, 6), skinD);
-    ridge.scale.set(1.1, 0.6, 1.2); ridge.position.set(sgn * 0.13, 0.5, -1.38); g.add(ridge);
-  }
-  // 背脊鳞甲（双列）
-  for (let i = 0; i < 9; i++) {
-    for (const sgn of [-1, 1]) {
-      const sc = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.15, 4), skinD);
-      sc.position.set(sgn * 0.1, 0.6 - i * 0.006, -0.6 + i * 0.28);
-      sc.rotation.set(0.15, 0.4, 0); g.add(sc);
-    }
-  }
-  // 尾：三段渐细
-  const tailG = new THREE.Group();
-  tailG.position.set(0, 0.33, 1.0);
-  g.add(tailG);
-  let tz = 0;
-  for (let i = 0; i < 4; i++) {
-    const r = 0.28 - i * 0.055;
-    const seg = new THREE.Mesh(new THREE.CapsuleGeometry(r, 0.36, 5, 8), i % 2 ? skin : skinD);
-    seg.rotation.x = Math.PI / 2; seg.scale.set(1, 1, 0.6);
-    seg.position.set(0, 0.01 * i, 0.22 + i * 0.34); tailG.add(seg);
-    tz = i;
-  }
-  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.4, 6), skinD);
-  tip.rotation.x = -Math.PI / 2; tip.position.set(0, 0, 0.22 + 4 * 0.34); tailG.add(tip);
-  // 四肢（短，带蹼）
-  const legs = [];
-  for (const [sx, sz, front] of [[-0.38, -0.6, 1], [0.38, -0.6, 1], [-0.38, 0.72, 0], [0.38, 0.72, 0]]) {
-    const leg = new THREE.Group();
-    const up = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.16, 4, 7), skinD);
-    up.position.y = -0.12; leg.add(up);
-    const foot = new THREE.Mesh(sph(0.11, 8, 6), skinD);
-    foot.scale.set(1.1, 0.45, 1.5); foot.position.set(0, -0.24, -0.06); leg.add(foot);
-    for (const cx of [-0.045, 0.045]) claw(leg, cx, -0.24, -0.16, 0.045, -0.9);
-    leg.position.set(sx, 0.34, sz);
-    g.add(leg); legs.push(leg);
-  }
-  return { group: g, legs, head, tail: tailG, phase: rng() * 6.28, face: -1 };
-}
-
-function makeSpider() {
-  // 外部扫描模型优先（头朝 +Z=前进方向，原点=脚底中心）；无文件时降级程序化建模
-  const si = instance('spider');
-  if (si) return { group: si.wrap, legs: [], head: null, phase: rng() * 6.28, face: 1 };
-
-  const g = new THREE.Group();
-  const chitin = furMat(0x241d18, 0.55, SCALE_N), chitinD = furMat(0x151210, 0.5, SCALE_N);
-  const abdomen = new THREE.Mesh(sph(0.54, 14, 10), chitin);
-  abdomen.scale.set(1, 0.88, 1.3); abdomen.position.set(0, 0.86, 0.55); g.add(abdomen);
-  // 腹部斑纹
-  const mark = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.42, 5), mat(0x8f2416, 0.6));
-  mark.rotation.x = -Math.PI / 2 - 0.35; mark.position.set(0, 1.16, 0.5); g.add(mark);
-  const mark2 = new THREE.Mesh(sph(0.12, 8, 6), mat(0x9c2c18, 0.6));
-  mark2.scale.set(1.4, 0.5, 1); mark2.position.set(0, 1.2, 0.78); g.add(mark2);
-  // 头胸
-  const ceph = new THREE.Mesh(sph(0.33, 12, 9), chitinD);
-  ceph.scale.set(1, 0.9, 1.05); ceph.position.set(0, 0.72, -0.5); g.add(ceph);
-  // 螯肢（牙）
-  for (const sgn of [-1, 1]) {
-    const fang = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.26, 6), mat(0x0e0c0a, 0.45));
-    fang.position.set(sgn * 0.1, 0.55, -0.78); fang.rotation.x = 0.5; g.add(fang);
-    const palp = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.2, 4, 6), chitinD);
-    palp.position.set(sgn * 0.17, 0.6, -0.7); palp.rotation.set(0.6, 0, sgn * 0.5); g.add(palp);
-  }
-  // 8 只眼
-  for (const s of [-1, 1]) {
-    for (let k = 0; k < 4; k++) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.042 - k * 0.006, 7, 6),
-        new THREE.MeshStandardMaterial({ color: 0xff5138, emissive: 0xff2a12, emissiveIntensity: 2.6, roughness: 0.2 }));
-      const off = [[0.06, 0.06], [0.13, 0.09], [0.17, 0.02], [0.09, -0.01]][k];
-      eye.position.set(s * off[0], 0.82 + off[1] * 0.6, -0.79 + k * 0.012); g.add(eye);
-    }
-  }
-  // 8 条腿（3 关节 + 刚毛）
-  const legs = [];
-  for (const s of [-1, 1]) {
-    for (let k = 0; k < 4; k++) {
-      const leg = new THREE.Group();
-      const fem = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.058, 0.8, 6), chitin);
-      fem.rotation.z = s * 0.95; fem.position.set(s * 0.34, 0.3, 0); leg.add(fem);
-      const tib = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.042, 0.75, 6), chitinD);
-      tib.rotation.z = s * -0.5; tib.position.set(s * 0.72, -0.05, 0); leg.add(tib);
-      // 刚毛
-      for (let b = 0; b < 3; b++) {
-        const bristle = new THREE.Mesh(new THREE.ConeGeometry(0.008, 0.1, 3), chitinD);
-        bristle.position.set(s * (0.3 + b * 0.2), 0.42 - b * 0.1, 0);
-        bristle.rotation.z = s * -0.9; leg.add(bristle);
-      }
-      leg.position.set(s * 0.14, 0.74, -0.32 + k * 0.27);
-      leg.rotation.y = (k - 1.5) * 0.42;
-      g.add(leg); legs.push(leg);
-    }
-  }
-  return { group: g, legs, head: ceph, phase: rng() * 6.28, face: -1 };
-}
-
 function makeDino() {
-  // 外部 dino.glb 优先（头朝 +Z=前进方向，底部中心=原点）；缺文件时程序化迅猛龙兜底
+  // 外部 dino.glb 优先（变异暴徒：双足驼背巨怪，含 idle/walk/swipe 三段骨骼动画）
+  // 头朝 +Z = 野兽前进方向（face:1）；缺文件时程序化迅猛龙兜底
   const di = instance('dino');
-  if (di) return { group: di.wrap, legs: [], head: null, phase: rng() * 6.28, face: 1 };
+  if (di) {
+    const mixer = new THREE.AnimationMixer(di.wrap);
+    const byName = (re, fb) => di.animations.find(c => re.test(c.name)) || di.animations[fb] || null;
+    const idleClip = byName(/^idle/i, 0);
+    const walkClip = byName(/^walk/i, 1);
+    const swipeClip = byName(/^swip/i, 2);
+    const actions = {};
+    if (idleClip) { actions.idle = mixer.clipAction(idleClip); actions.idle.play(); }
+    if (walkClip) actions.walk = mixer.clipAction(walkClip);
+    if (swipeClip) actions.swipe = mixer.clipAction(swipeClip);
+    return {
+      group: di.wrap, legs: [], head: null, phase: rng() * 6.28, face: 1,
+      mixer, actions, anim: 'idle',
+      swipeDur: swipeClip ? swipeClip.duration : 1.0,
+      // 原生步速（m/s，实测支撑相脚速）：1 倍速时脚掌正好贴地不打滑
+      walkSpeed: 1.40,
+    };
+  }
   const g = new THREE.Group();
   const hide = furMat(0x3b3520, 0.82, SCALE_N), hideD = furMat(0x2a2513, 0.8, SCALE_N), hideL = furMat(0x4d4527, 0.85, SCALE_N);
   // 躯干：前倾的流线体
@@ -421,8 +323,49 @@ function makeDino() {
   return { group: g, legs, head, tail: tailG, phase: rng() * 6.28, face: -1 };
 }
 
-const MAKERS = { wolf: makeWolf, bear: makeBear, croc: makeCroc, spider: makeSpider, dino: makeDino };
-const SCALES = { wolf: 1.14, bear: 1.0, croc: 1.0, spider: 1.5, dino: 1.0 };
+function makeZombie() {
+  // 外部 zombie.glb 优先（洞窟僵尸：兜帽平民+狼牙棒，含 idle/walk/swipe 三段骨骼动画）
+  // 头朝 +Z = 野兽前进方向（face:1）；缺文件时程序化简版僵尸兜底
+  const zi = instance('zombie');
+  if (zi) {
+    const mixer = new THREE.AnimationMixer(zi.wrap);
+    const byName = (re, fb) => zi.animations.find(c => re.test(c.name)) || zi.animations[fb] || null;
+    const idleClip = byName(/^idle/i, 0);
+    const walkClip = byName(/^walk/i, 1);
+    const swipeClip = byName(/^swip/i, 2);
+    const actions = {};
+    if (idleClip) { actions.idle = mixer.clipAction(idleClip); actions.idle.play(); }
+    if (walkClip) actions.walk = mixer.clipAction(walkClip);
+    if (swipeClip) actions.swipe = mixer.clipAction(swipeClip);
+    return {
+      group: zi.wrap, legs: [], head: null, phase: rng() * 6.28, face: 1,
+      mixer, actions, anim: 'idle',
+      swipeDur: swipeClip ? swipeClip.duration : 1.0,
+      // 丧尸踱步的原生步速（慢速小步）：spd 0.8 → 播放速率 ~1.14，拖沓踉跄正好
+      walkSpeed: 0.70,
+    };
+  }
+  // 兜底：程序化简版僵尸（矮小人形，双臂前伸）
+  const g = new THREE.Group();
+  const skin = furMat(0x6f7d4a, 0.85, SCALE_N), cloth = furMat(0x33302a, 0.9, SCALE_N);
+  const torso = new THREE.Mesh(cap(0.16, 0.42, 10), cloth); torso.position.y = 0.86; g.add(torso);
+  const headM = new THREE.Mesh(sph(0.12, 10, 8), skin); headM.position.y = 1.24; g.add(headM);
+  const legs = [];
+  for (const sx of [-0.09, 0.09]) {
+    const leg = new THREE.Group();
+    const thigh = new THREE.Mesh(cap(0.055, 0.3, 7), cloth); thigh.position.y = -0.18; leg.add(thigh);
+    const shin = new THREE.Mesh(cap(0.045, 0.28, 7), skin); shin.position.y = -0.55; leg.add(shin);
+    leg.position.set(sx, 0.72, 0); g.add(leg); legs.push(leg);
+  }
+  for (const sx of [-0.2, 0.2]) {
+    const arm = new THREE.Mesh(cap(0.04, 0.34, 7), skin);
+    arm.position.set(sx, 1.02, 0.08); arm.rotation.x = -1.2; g.add(arm); // 僵尸前伸手
+  }
+  return { group: g, legs, head: headM, phase: rng() * 6.28, face: -1 };
+}
+
+const MAKERS = { wolf: makeWolf, bear: makeBear, dino: makeDino, zombie: makeZombie };
+const SCALES = { wolf: 1.0, bear: 1.0, dino: 1.0, zombie: 1.0 };
 
 // 骨骼动画切换（mutant）：交叉淡入淡出避免跳变；once=true 单次播放（攻击挥爪）
 function playBeastAnim(b, name, opts = {}) {
@@ -502,6 +445,8 @@ export class BeastManager {
       hp: spec.hp, maxHp: spec.hp,
       state: 'idle', stateT: rng() * 3,
       tgtX: x, tgtZ: z, animT: 0, atkCd: 0,
+      // 每只的步速微差（0.88–1.12）：一群行尸不会齐步走，各自节奏略有不同更像活物
+      spdMul: 0.88 + rng() * 0.24,
       homeX: x, homeZ: z, aggro: false, deadT: 0,
     });
   }
@@ -520,7 +465,7 @@ export class BeastManager {
     let best = null, bestT = 1e9;
     for (const b of this.beasts) {
       if (b.state === 'dead') continue;
-      const size = b.type === 'bear' ? 1.6 : b.type === 'croc' ? 1.3 : b.type === 'dino' ? 1.1 : 1.0;
+      const size = b.type === 'bear' ? 1.6 : b.type === 'dino' ? 1.1 : 1.0;
       V.set(b.x, b.y + size * 0.9, b.z);
       const d = ray.distanceSqToPoint(V);
       if (d < (size * 0.85) ** 2) {
@@ -554,8 +499,7 @@ export class BeastManager {
       }
       const spec = b.spec;
       const d = dist2(px, pz, b.x, b.z);
-      const inCave = b.type === 'spider';
-      const sight = inCave ? 17 : (b.type === 'croc' ? 13 : 26);
+      const sight = 26;
       const playerNoise = player.isSneaking ? 0 : 1;
 
       // —— 状态机 ——
@@ -564,7 +508,7 @@ export class BeastManager {
         if (d < sight && !player.dead) {
           b.aggro = true;
           b.state = 'alert'; b.stateT = 0.5 + rng() * 0.8;
-          this.onSfx && this.onSfx(b.type === 'wolf' ? 'growl' : b.type === 'bear' || b.type === 'dino' ? 'roar' : b.type === 'croc' ? 'hiss' : 'skitter', b.x, b.z);
+          this.onSfx && this.onSfx(b.type === 'wolf' ? 'growl' : 'roar', b.x, b.z);
         }
       }
       switch (b.state) {
@@ -597,7 +541,7 @@ export class BeastManager {
             } else {
               b.stateT = 0.34; // 前扑耗时
             }
-            this.onSfx && this.onSfx(b.type === 'croc' ? 'hiss' : b.type === 'spider' ? 'skitter' : 'snap', b.x, b.z);
+            this.onSfx && this.onSfx('snap', b.x, b.z);
             break;
           }
           // 侧翼包抄偏移
@@ -609,15 +553,17 @@ export class BeastManager {
           }
           const ang = Math.atan2(tx - b.x, tz - b.z);
           b.yaw = ang;
-          const sp = spec.spd * (b.type === 'croc' && d > 8 ? 1.35 : 1); // 鳄鱼冲刺
+          const sp = spec.spd * (b.spdMul || 1);
+          b.moveSpd = sp;   // 实际位移速度 → 动画播放速率按它匹配（见下方"动画"段）
           this.moveBeast(b, Math.sin(ang) * sp * dt, Math.cos(ang) * sp * dt, dt);
           break;
         }
         case 'attack': {
           b.stateT -= dt;
-          // 前扑位移（仅前 0.34s；mutant 挥爪期间原地不动）
+          // 前扑位移（仅前 0.34s；有挥爪动画的兽挥爪期间基本原地，靠小步前压）
           if (b.lungeT > 0) {
-            const lungeSp = spec.spd * 2.2;
+            // 挥爪前压：只有 0.34s、一小步的距离，不靠这段位移抢速度
+            const lungeSp = spec.spd * (b.spdMul || 1) * (b.mixer ? 1.5 : 2.2);
             this.moveBeast(b, Math.sin(b.yaw) * lungeSp * dt, Math.cos(b.yaw) * lungeSp * dt, dt, true);
             b.lungeT -= dt;
           }
@@ -637,8 +583,19 @@ export class BeastManager {
 
       // —— 动画 ——
       if (b.mixer) {
-        // 骨骼动画兽（mutant）：非攻击时播 idle（追击时加速制造奔跑感），攻击已单独切入 swipe
-        if (b.state !== 'attack') playBeastAnim(b, 'idle', { timeScale: b.state === 'chase' ? 2.4 : 1.1 });
+        // 骨骼动画兽：攻击播 swipe（进入攻击时已单次切入）
+        // 追击播 walk，播放速率 = 实际移动速度 ÷ 动画原生步速 —— 脚掌正好踩实地面。
+        // 关键：播放速率上限压到 1.4 倍。超过这个值，走路的节奏就被"快放"了：
+        // 腿摆得飞快、身体却只是平移，一眼假。宁可让它慢慢走过来，也不加快帧数。
+        if (b.state !== 'attack') {
+          if (b.actions.walk && b.state === 'chase') {
+            const mv = b.moveSpd || spec.spd;
+            const ts = Math.min(1.4, Math.max(0.6, mv / (b.walkSpeed || 1.3)));
+            playBeastAnim(b, 'walk', { timeScale: ts });
+          } else {
+            playBeastAnim(b, 'idle', { timeScale: 1.0 });
+          }
+        }
         b.mixer.update(dt);
       }
       const moving = b.state === 'chase' || b.state === 'wander' || b.state === 'attack';
@@ -646,14 +603,13 @@ export class BeastManager {
       const sw = moving ? Math.sin(b.animT * 2 + b.phase) : 0;
       b.legs.forEach((leg, i) => {
         const ph = (i % 2 === 0 ? 1 : -1) * (i < 2 ? 1 : 1);
-        leg.rotation.x = sw * 0.6 * ph * (i < 2 ? 1 : -1) + (b.type === 'spider' ? Math.sin(b.animT * 2.7 + i) * 0.25 : 0);
+        leg.rotation.x = sw * 0.6 * ph * (i < 2 ? 1 : -1);
       });
       b.group.position.set(b.x, b.y, b.z);
       // face=-1：程序化模型头朝 -Z，需补 π 才能面向移动方向；GLB 模型头朝 +Z 不用补
       b.group.rotation.y = b.yaw + (b.face < 0 ? Math.PI : 0);
       // 身体起伏（骨骼动画兽自带动作起伏，不再叠加）
-      if (b.type === 'spider') b.group.position.y += Math.sin(b.animT * 3) * 0.04;
-      else if (!b.mixer) b.group.position.y += Math.abs(sw) * 0.06;
+      if (!b.mixer) b.group.position.y += Math.abs(sw) * 0.06;
     }
   }
 
@@ -669,9 +625,6 @@ export class BeastManager {
         cz = c.z + Math.cos(a) * (c.r + 0.5);
       }
     }
-    // 鳄鱼不离水域太远 / 蜘蛛不离洞
-    if (b.type === 'croc' && dist2(cx, cz, 86, 52) > 55) return;
-    if (b.type === 'spider' && (Math.abs(cx) > 10 || cz > -46 || cz < -176)) return;
     b.x = cx; b.z = cz;
     const gy = groundHeight(b.x, b.z, 0, b.y);
     if (!ignoreBlock) {

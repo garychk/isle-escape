@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-# mutant.glb 构建：Mixamo mutant 模型（mutant.fbx）+ 挥爪攻击动作（mutant_swiping.fbx）合并为一个 GLB
-# 输出 assets/mutant.glb，含两段动画：idle / swipe
+# mutant.glb 构建：Mixamo mutant 模型（mutant.fbx）+ 挥爪攻击动作（mutant_swiping.fbx）
+#   + 行走动作（dino_walk.fbx，同 mixamorig 骨架按骨骼名重定向）合并为一个 GLB
+# 输出 assets/mutant.glb，含三段动画：idle / walk / swipe
 # 用法：blender --background --python build_mutant.py
 import bpy, os, sys
 
@@ -8,6 +9,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))          # isle-escape/
 SRC_IDLE = os.path.join(ROOT, 'assets_src', 'mixamo', 'mutant.fbx')
 SRC_SWIPE = os.path.join(ROOT, 'assets_src', 'mixamo', 'mutant_swiping.fbx')
+SRC_WALK = os.path.join(ROOT, 'assets_src', 'mixamo', 'dino_walk.fbx')
 OUT = os.path.join(ROOT, 'assets', 'mutant.glb')
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -43,6 +45,27 @@ for a in list(bpy.data.armatures):
     if a.users == 0:
         bpy.data.armatures.remove(a)
 
+# ---- 2.5 行走动作（dino_walk.fbx，同 mixamorig 骨架，按骨骼名重定向到 mutant 骨）----
+before = set(bpy.data.objects)
+bpy.ops.import_scene.fbx(filepath=SRC_WALK)
+objs3 = [o for o in bpy.data.objects if o not in before]
+arm3 = next(o for o in objs3 if o.type == 'ARMATURE')
+act_walk = arm3.animation_data.action if arm3.animation_data else None
+assert act_walk is not None, 'walk action not found'
+act_walk.name = 'walk'
+act_walk.use_fake_user = True
+print('WALK action', act_walk.name, tuple(round(v, 1) for v in act_walk.frame_range), flush=True)
+bpy.ops.object.select_all(action='DESELECT')
+for o in objs3:
+    o.select_set(True)
+bpy.ops.object.delete()
+for m in list(bpy.data.meshes):
+    if m.users == 0:
+        bpy.data.meshes.remove(m)
+for a in list(bpy.data.armatures):
+    if a.users == 0:
+        bpy.data.armatures.remove(a)
+
 # ---- 3. 贴图降采样 ----
 for im in bpy.data.images:
     if im.size[0] == 0:
@@ -66,7 +89,7 @@ for m in bpy.data.materials:
 arm1.animation_data.action = None
 for tr in list(arm1.animation_data.nla_tracks):
     arm1.animation_data.nla_tracks.remove(tr)
-for act, nm in ((act_idle, 'idle'), (act_swipe, 'swipe')):
+for act, nm in ((act_idle, 'idle'), (act_walk, 'walk'), (act_swipe, 'swipe')):
     tr = arm1.animation_data.nla_tracks.new()
     tr.name = nm
     strip = tr.strips.new(nm, int(act.frame_range[0]), act)
