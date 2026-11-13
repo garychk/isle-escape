@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>绝岛密林 · Isle Escape</title>
+<style>
+:root {
+  color-scheme: dark;
+  --ink: #0a0d0a; --ink-2: #101510; --bone: #e6e2d4; --bone-dim: rgba(230,226,212,.62); --bone-faint: rgba(230,226,212,.25);
+  --moss: #7fae62; --moss-hot: #a4d17e; --amber: #e8a33d; --amber-hot: #f6c268;
+  --alarm: #e05a3a; --blood: #b8352a; --steel: #8a9484;
+  --line: rgba(230,226,212,.18); --plate: rgba(10,13,10,.62); --plate-solid: rgba(12,16,12,.94);
+  --f-d: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --f-l: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --f-m: 'PingFang SC', ui-monospace, Consolas, monospace;
+  --sat: env(safe-area-inset-top, 0px); --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px); --sar: env(safe-area-inset-right, 0px);
+  --gl: max(18px, env(safe-area-inset-left, 0px)); --gr: max(18px, env(safe-area-inset-right, 0px));
+  --shadow: 0 0 2px rgba(0,0,0,.8), 0 1px 6px rgba(0,0,0,.55);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--ink); color: var(--bone); overflow: hidden; font-family: var(--f-l); -webkit-text-size-adjust: 100%; }
+#app { position: fixed; inset: 0; overflow: hidden; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+#view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; touch-action: none; cursor: crosshair; }
+#ui { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+kbd { display: inline-block; font: 500 10px/1 var(--f-m); color: var(--bone); border: 1px solid rgba(230,226,212,.45); padding: 3px 5px 2px; margin: 0 2px; min-width: 18px; text-align: center; text-transform: uppercase; }
+
+/* ---- boot ---- */
+#boot { position: absolute; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: var(--ink); transition: opacity .6s ease; }
+#boot.done { opacity: 0; pointer-events: none; }
+.boot-mark { font: 900 clamp(42px, 9vw, 92px)/1 var(--f-d); letter-spacing: .18em; margin-right: -.18em; color: var(--bone); }
+.boot-sub { font: 500 12px/1 var(--f-m); letter-spacing: .3em; text-transform: uppercase; color: var(--steel); }
+.boot-bar { width: min(320px, 70vw); height: 2px; background: #1e261d; }
+.boot-bar i { display: block; height: 100%; width: 0%; background: var(--moss); transition: width .25s ease; }
+#fatal { position: absolute; left: 0; right: 0; bottom: 0; z-index: 99; padding: 10px 16px; font: 12px/1.5 var(--f-m); color: #ffb4a8; background: rgba(40,8,4,.88); white-space: pre-wrap; max-height: 40%; overflow: auto; pointer-events: auto; user-select: text; display: none; }
+#fatal.on { display: block; }
+
+/* =====================================================================  HUD  */
+.hud { position: absolute; inset: 0; opacity: 0; transition: opacity .4s ease; pointer-events: none; color: var(--bone); text-shadow: var(--shadow); }
+.hud.on { opacity: 1; }
+.h-k { font: 600 10px/1 var(--f-l); letter-spacing: .3em; text-transform: uppercase; color: var(--bone-dim); }
+
+/* compass tape */
+.h-compass { position: absolute; top: calc(14px + var(--sat)); left: 50%; width: min(430px, calc(100vw - 60px)); height: 62px; transform: translateX(-50%); }
+.h-tape-wrap { position: absolute; left: 0; right: 0; top: 0; height: 30px; overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent); mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent); }
+.h-tape { position: absolute; left: 0; top: 0; height: 100%; will-change: transform; }
+.h-tape i { position: absolute; bottom: 0; width: 1px; background: var(--bone); }
+.h-tape i.t1 { height: 4px; opacity: .4; } .h-tape i.t2 { height: 7px; opacity: .75; } .h-tape i.t3 { height: 11px; width: 2px; }
+.h-tape b { position: absolute; top: 0; transform: translateX(-50%); font: 400 10px/1.7 var(--f-m); color: var(--bone-dim); white-space: nowrap; }
+.h-tape b.card { font: 700 15px/1 var(--f-d); color: var(--bone); letter-spacing: .04em; }
+.h-needle { position: absolute; left: 50%; top: 13px; width: 2px; height: 17px; margin-left: -1px; background: var(--moss); box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
+.h-mark { position: absolute; top: 32px; width: 56px; margin-left: -28px; text-align: center; will-change: transform; color: var(--amber); }
+.h-mark i { display: block; width: 9px; height: 9px; margin: 0 auto 4px; border: 1.5px solid currentColor; transform: rotate(45deg); background: rgba(10,13,10,.5); }
+.h-mark b { font: 700 12px/1 var(--f-d); letter-spacing: .08em; }
+.h-mark span { display: block; font: 400 9px/1.6 var(--f-m); color: var(--bone); }
+
+/* objective */
+.h-obj { position: absolute; top: calc(18px + var(--sat)); left: var(--gl); max-width: min(320px, 46vw); padding-left: 13px; border-left: 2px solid var(--moss); }
+.h-obj-t { font: 600 clamp(15px, 1.6vw, 19px)/1.5 var(--f-l); letter-spacing: .06em; margin: 5px 0 4px; }
+.h-obj-d { font: 400 11px/1.7 var(--f-m); letter-spacing: .05em; color: var(--bone-dim); }
+.h-obj-d b { color: var(--amber); font-weight: 600; }
+/* 画面暗角 + 轻微冷调压边，增强密林压迫感 */
+.vignette { position: absolute; inset: 0; pointer-events: none; opacity: .92;
+  background:
+    radial-gradient(ellipse 78% 72% at 50% 47%, rgba(0,0,0,0) 45%, rgba(8,12,9,.34) 78%, rgba(5,8,6,.62) 100%),
+    linear-gradient(to bottom, rgba(9,14,10,.16), rgba(9,14,10,0) 22%, rgba(9,14,10,0) 78%, rgba(9,14,10,.22)); }
+
+/* vitals */
+.h-vitals { position: absolute; left: var(--gl); bottom: calc(20px + var(--sab)); width: min(300px, 42vw); }
+.v-row { margin-top: 9px; }
+.v-lab { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5px; }
+.v-lab .h-k { letter-spacing: .2em; }
+.v-lab b { font: 600 13px/1 var(--f-m); color: var(--bone); font-variant-numeric: tabular-nums; }
+.v-bar { height: 6px; background: rgba(230,226,212,.14); box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
+.v-bar i { display: block; height: 100%; width: 100%; transition: width .18s ease; }
+.v-hp i { background: linear-gradient(90deg, #c4452f, #e06a4a); }
+.v-hp.low i { animation: hpblink 1s steps(2) infinite; }
+@keyframes hpblink { 50% { opacity: .35; } }
+.v-st i { background: var(--moss); }
+.v-poison { margin-top: 10px; font: 600 11px/1 var(--f-m); letter-spacing: .14em; color: #9fd06a; opacity: 0; transition: opacity .3s; }
+.v-poison.on { opacity: 1; animation: hpblink 1.2s steps(2) infinite; }
+
+/* ammo / weapon */
+.h-ammo { position: absolute; right: var(--gr); bottom: calc(20px + var(--sab)); text-align: right; }
+.h-ammo-n { font: 700 clamp(44px, 6vw, 64px)/1 var(--f-d); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.h-ammo-n small { font: 600 18px/1 var(--f-m); color: var(--bone-dim); }
+.h-ammo-n.empty { color: var(--alarm); }
+.h-wep { margin-top: 7px; font: 600 12px/1.5 var(--f-l); letter-spacing: .22em; text-transform: uppercase; }
+.h-wep em { font-style: normal; color: var(--amber); }
+.h-hint { margin-top: 5px; font: 500 10px/1.6 var(--f-m); color: var(--amber); letter-spacing: .1em; opacity: 0; transition: opacity .2s; }
+.h-hint.on { opacity: 1; }
+
+/* crosshair + hit marker */
+.h-cross { position: absolute; left: 50%; top: 50%; transition: opacity .15s; }
+.h-cross.off { opacity: 0; }
+.h-cross i { position: absolute; left: 0; top: 0; background: var(--bone); box-shadow: 0 0 0 1px rgba(0,0,0,.35); transition: transform .05s linear; }
+.h-cross .c-t, .h-cross .c-b { width: 2px; height: 8px; transform: translate3d(-50%, 0, 0); }
+.h-cross .c-l, .h-cross .c-r { width: 8px; height: 2px; transform: translate3d(0, -50%, 0); }
+.h-cross .c-dot { width: 2px; height: 2px; margin: -1px 0 0 -1px; opacity: .8; }
+.h-hit { position: absolute; left: 50%; top: 50%; width: 34px; height: 34px; transform: translate(-50%,-50%); opacity: 0; }
+.h-hit.on { animation: hitpop .3s ease-out both; }
+@keyframes hitpop { 0% { opacity: 1; transform: translate(-50%,-50%) scale(1.25); } 100% { opacity: 0; transform: translate(-50%,-50%) scale(.85); } }
+.h-hit i { position: absolute; width: 2px; height: 12px; background: #fff; }
+.h-hit i:nth-child(1) { left: 4px; top: 0; transform: rotate(-45deg); } .h-hit i:nth-child(2) { right: 4px; top: 0; transform: rotate(45deg); }
+.h-hit i:nth-child(3) { left: 4px; bottom: 0; transform: rotate(45deg); } .h-hit i:nth-child(4) { right: 4px; bottom: 0; transform: rotate(-45deg); }
+.h-hit.kill i { background: var(--alarm); width: 3px; }
+
+/* damage feedback */
+.h-dmg { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, transparent 42%, rgba(184,53,42,.55) 100%); transition: opacity .12s; }
+.h-dmg.on { opacity: 1; }
+.h-lowhp { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, transparent 46%, rgba(120,10,5,.5) 100%); transition: opacity .6s; }
+.h-lowhp.on { opacity: 1; animation: hpblink 1.4s ease-in-out infinite; }
+
+/* interact prompt */
+.h-prompt { position: absolute; left: 50%; top: 60%; transform: translateX(-50%); text-align: center; opacity: 0; transition: opacity .2s; }
+.h-prompt.on { opacity: 1; }
+.h-prompt .pk { display: inline-block; font: 700 12px/1 var(--f-d); color: var(--ink); background: var(--amber); padding: 5px 8px 4px; letter-spacing: .1em; margin-bottom: 8px; }
+.h-prompt .pt { font: 500 14px/1.4 var(--f-l); letter-spacing: .08em; }
+
+/* zone loc card */
+.loc-card { position: absolute; left: max(var(--gl), 5vw); bottom: 26vh; padding-left: 16px; opacity: 0; transition: opacity .5s; text-shadow: var(--shadow); max-width: 70vw; }
+.loc-card i { position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; background: var(--amber); }
+.loc-card b { display: block; font: 700 clamp(20px, 3vw, 34px)/1.15 var(--f-d); letter-spacing: .2em; }
+.loc-card span { display: block; margin-top: 6px; font: 400 11px/1.5 var(--f-m); letter-spacing: .12em; text-transform: uppercase; color: var(--bone-dim); }
+.loc-card.on { opacity: 1; }
+
+/* toasts */
+.h-almanac { position: absolute; right: var(--gr); top: calc(20px + var(--sat)); text-align: right; pointer-events: none; }
+.h-almanac b { display: block; font: 700 clamp(18px, 1.7vw, 22px)/1 var(--f-d); letter-spacing: .06em; color: var(--bone); font-variant-numeric: tabular-nums; }
+.h-almanac span { display: block; margin-top: 3px; font: 600 10px/1.5 var(--f-m); letter-spacing: .18em; color: var(--bone-dim); }
+.h-almanac span em { font-style: normal; color: #a8bd7c; }
+.h-almanac.night b { color: #b9c8e8; }
+@media (max-width: 760px) {
+  .h-almanac { top: calc(150px + var(--sat)); left: var(--gl); right: auto; text-align: left; }
+  .h-almanac b { font-size: 15px; }
+  .h-almanac span { font-size: 9px; }
+}
+.h-toasts { position: absolute; left: 50%; top: 17%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; width: max-content; max-width: 86vw; }
+.toast { font: 500 14px/1.4 var(--f-l); letter-spacing: .06em; color: var(--bone); background: var(--plate); border-left: 2px solid var(--moss); padding: 9px 16px; opacity: 0; transform: translateY(-6px); transition: opacity .3s, transform .3s; max-width: 86vw; }
+.toast.on { opacity: 1; transform: none; }
+.toast.warn { border-left-color: var(--alarm); color: #f3c8bd; }
+
+/* =====================================================================  menus  */
+.menu { position: absolute; inset: 0; display: none; z-index: 40; }
+.menu.on { display: block; }
+.m-veil { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(10,13,10,.88) 0%, rgba(10,13,10,.55) 40%, rgba(10,13,10,.12) 75%), linear-gradient(0deg, rgba(10,13,10,.75) 0%, rgba(10,13,10,0) 50%); }
+.menu[data-screen="dead"] .m-veil { background: rgba(10,13,10,.45); }
+.m-card { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: min(440px, calc(100vw - 36px)); max-height: calc(100vh - 30px); overflow: auto; padding: 28px 28px 24px; background: var(--plate-solid); border: 1px solid var(--line); border-top: 3px solid var(--moss); }
+.menu[data-screen="dead"] .m-card { border-top-color: var(--alarm); }
+.m-k { font: 600 12px/1 var(--f-l); letter-spacing: .3em; text-transform: uppercase; color: var(--steel); }
+.m-h { font: 900 clamp(38px, 9vw, 56px)/1.1 var(--f-d); letter-spacing: .1em; margin: 10px 0 12px; }
+.m-dead .m-h { color: var(--alarm); }
+.m-line { font: 400 12px/1.7 var(--f-m); color: var(--steel); }
+.m-stats > div { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 0 9px; border-top: 1px solid var(--line); }
+.m-stats > div:last-child { border-bottom: 1px solid var(--line); }
+.m-stats dt { font: 500 12px/1 var(--f-l); letter-spacing: .18em; text-transform: uppercase; color: var(--steel); }
+.m-stats dd { font: 600 15px/1 var(--f-m); color: var(--bone); margin: 0; }
+.m-rating { display: flex; align-items: baseline; justify-content: space-between; margin: 6px 0 14px; }
+.m-rating span { font: 500 13px/1 var(--f-l); letter-spacing: .2em; text-transform: uppercase; color: var(--steel); }
+.m-rating b { font: 900 44px/.9 var(--f-d); color: var(--amber); letter-spacing: .06em; }
+.m-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.btn { font: 600 14px/1 var(--f-l); letter-spacing: .16em; color: var(--bone); background: rgba(10,13,10,.55); border: 1px solid rgba(230,226,212,.42); padding: 13px 22px 12px; cursor: pointer; text-align: center; transition: background .12s, border-color .12s; pointer-events: auto; }
+.btn:hover { border-color: var(--bone); background: rgba(230,226,212,.12); }
+.btn.primary { background: var(--moss); border-color: var(--moss); color: var(--ink); font-size: 16px; font-weight: 700; letter-spacing: .24em; padding: 15px 34px 14px; }
+.btn.primary:hover { background: var(--moss-hot); border-color: var(--moss-hot); }
+
+/* title */
+.m-title { position: absolute; inset: 0; display: flex; align-items: flex-end; padding: calc(20px + var(--sat)) max(var(--gr), 5vw) calc(clamp(26px, 6vh, 60px) + var(--sab)) max(var(--gl), 6vw); pointer-events: auto; }
+.m-title-main { max-width: 640px; }
+.m-eyebrow { display: flex; align-items: center; gap: 12px; font: 600 12px/1 var(--f-l); letter-spacing: .3em; text-transform: uppercase; }
+.m-tag { font: 900 13px/1 var(--f-d); color: var(--ink); background: var(--amber); padding: 4px 8px 3px; letter-spacing: .1em; }
+.m-word { font: 900 clamp(54px, 11vw, 130px)/1.1 var(--f-d); letter-spacing: .1em; margin: 14px 0 16px; color: var(--bone); text-shadow: 0 2px 30px rgba(0,0,0,.5); }
+.m-word .m-subtitle { display: block; font-size: .3em; line-height: 1.5; letter-spacing: .3em; color: var(--moss); font-weight: 700; }
+.m-premise { border-top: 1px solid var(--line); padding-top: 14px; font: 500 clamp(15px, 1.4vw, 19px)/1.75 var(--f-l); letter-spacing: .03em; color: rgba(230,226,212,.92); max-width: 40em; }
+.m-premise::before { content: ''; display: block; width: 72px; height: 3px; background: var(--amber); margin: -17px 0 14px; }
+.m-note { margin-top: 14px; font: 400 11px/1.8 var(--f-m); letter-spacing: .04em; color: var(--steel); max-width: 56ch; }
+.m-legend { display: none; position: absolute; right: max(var(--gr), 5vw); bottom: calc(clamp(26px, 6vh, 60px) + var(--sab)); text-align: right; }
+.m-legend > div { display: flex; justify-content: flex-end; align-items: center; gap: 14px; margin-top: 10px; font: 500 12px/1 var(--f-l); letter-spacing: .16em; text-transform: uppercase; color: rgba(230,226,212,.8); white-space: nowrap; }
+.m-legend em { font-style: normal; color: var(--amber); }
+@media (min-width: 1100px) and (min-height: 620px) { .m-legend { display: block; } }
+
+/* settings panel */
+.panel { position: absolute; top: 0; right: 0; bottom: 0; width: min(420px, 100vw); z-index: 45; display: flex; flex-direction: column; background: rgba(12,16,12,.96); border-left: 1px solid var(--line); padding: calc(10px + var(--sat)) 0 var(--sab); }
+.panel[hidden] { display: none; }
+.panel-h { display: flex; align-items: center; justify-content: space-between; padding: 10px 22px 12px; border-bottom: 1px solid var(--line); }
+.panel-h .m-k { color: var(--bone); }
+.panel-x { background: none; border: 1px solid var(--line); color: var(--bone); font: 600 14px/1 var(--f-m); padding: 6px 12px; cursor: pointer; }
+.panel-x:hover { border-color: var(--bone); }
+.panel-b { flex: 1; overflow-y: auto; padding: 4px 22px 24px; }
+.panel-b h3 { font: 600 11px/1 var(--f-l); letter-spacing: .28em; text-transform: uppercase; color: var(--steel); margin: 22px 0 4px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.row { padding: 14px 0 16px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+.row label { font: 600 13px/1 var(--f-l); letter-spacing: .18em; text-transform: uppercase; color: var(--bone); }
+.seg { display: flex; }
+.seg button { flex: 1; min-height: 38px; font: 600 12px/1 var(--f-l); letter-spacing: .12em; color: var(--bone-dim); background: transparent; border: 1px solid rgba(230,226,212,.35); margin-left: -1px; cursor: pointer; }
+.seg button:first-child { margin-left: 0; }
+.seg button[aria-pressed="true"] { background: var(--bone); border-color: var(--bone); color: var(--ink); }
+.slider { display: flex; align-items: center; gap: 14px; }
+.slider output { font: 600 13px/1 var(--f-m); min-width: 5ch; text-align: right; color: var(--bone); }
+.slider input { flex: 1; height: 28px; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; pointer-events: auto; }
+.slider input::-webkit-slider-runnable-track { height: 2px; background: rgba(230,226,212,.35); }
+.slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 10px; height: 20px; margin-top: -9px; background: var(--moss); }
+.toggle { display: inline-flex; align-items: center; gap: 12px; background: none; border: 0; padding: 4px 0; color: var(--bone); cursor: pointer; font: 500 13px/1 var(--f-m); pointer-events: auto; }
+.toggle i { position: relative; width: 44px; height: 22px; border: 1px solid rgba(230,226,212,.45); }
+.toggle i::after { content: ''; position: absolute; left: 3px; top: 3px; width: 16px; height: 14px; background: var(--bone-dim); transition: transform .12s, background .12s; }
+.toggle[aria-pressed="true"] i { border-color: var(--moss); } .toggle[aria-pressed="true"] i::after { transform: translateX(20px); background: var(--moss); }
+.keys { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; }
+.keys > div { display: flex; justify-content: space-between; align-items: baseline; padding: 7px 0; border-bottom: 1px solid rgba(230,226,212,.08); }
+.keys dt { font: 500 12px/1.3 var(--f-l); letter-spacing: .12em; color: var(--steel); }
+.keys dd { margin: 0; }
+
+/* =====================================================================  touch  */
+.touch { position: absolute; inset: 0; display: none; pointer-events: none; }
+.is-touch.in-game .touch { display: block; }
+.t-stick { position: absolute; left: 26px; bottom: calc(90px + var(--sab)); width: 120px; height: 120px; border: 1.5px solid rgba(230,226,212,.35); border-radius: 50%; pointer-events: auto; touch-action: none; }
+.t-stick i { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: rgba(230,226,212,.3); }
+.t-look { position: absolute; right: 0; top: 0; bottom: 0; width: 55%; pointer-events: auto; touch-action: none; }
+.t-btns { position: absolute; right: 22px; bottom: calc(88px + var(--sab)); display: grid; grid-template-columns: 64px 64px; gap: 12px; pointer-events: none; }
+.t-btn { width: 64px; height: 64px; border-radius: 50%; border: 1.5px solid rgba(230,226,212,.4); background: rgba(10,13,10,.45); color: var(--bone); font: 700 12px/1 var(--f-d); letter-spacing: .06em; display: flex; align-items: center; justify-content: center; pointer-events: auto; touch-action: none; }
+.t-btn.fire { width: 84px; height: 84px; border-color: var(--amber); color: var(--amber); font-size: 14px; }
+.t-btn:active { background: rgba(230,226,212,.25); }
+.t-btn[data-k="knife"] { border-color: rgba(230,226,212,.6); }
+
+@media (max-width: 760px) {
+  .h-obj { top: calc(84px + var(--sat)); max-width: 56vw; } .h-obj-t { font-size: 14px; }
+  .h-compass { top: calc(10px + var(--sat)); height: 54px; }
+  .h-ammo-n { font-size: 42px; }
+  .is-touch .h-ammo { right: var(--gr); bottom: auto; top: calc(84px + var(--sat)); }
+  .is-touch .h-vitals { bottom: calc(224px + var(--sab)); left: 16px; width: 168px; }
+  .is-touch .v-lab b { font-size: 11px; }
+  .is-touch .v-row { margin-top: 6px; }
+  .is-touch .v-bar { height: 5px; }
+  .m-card { padding: 22px 20px 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="view" tabindex="0"></canvas>
+
+  <div id="ui">
+    <div class="vignette"></div>
+    <!-- HUD -->
+    <div class="hud" id="hud">
+      <div class="h-compass">
+        <div class="h-tape-wrap"><div class="h-tape" id="tape"></div></div>
+        <div class="h-needle"></div>
+        <div class="h-mark" id="objmark"><i></i><b>筏</b><span id="objdist">--</span></div>
+      </div>
+      <div class="h-obj" id="objbox">
+        <div class="h-k">任务目标</div>
+        <div class="h-obj-t" id="objtitle">穿越密林</div>
+        <div class="h-obj-d" id="objdesc">抵达北岸的<span style="color:var(--amber)">救生筏</span>逃离孤岛</div>
+      </div>
+      <div class="h-almanac" id="almanac">
+        <b id="alclock">06:00</b>
+        <span><em id="alweather">晴</em> · <i id="alday" style="font-style:normal">第 1 天</i></span>
+      </div>
+      <div class="h-vitals">
+        <div class="v-row">
+          <div class="v-lab"><span class="h-k">生命</span><b id="hpnum">100</b></div>
+          <div class="v-bar v-hp" id="hpbar"><i style="width:100%"></i></div>
+        </div>
+        <div class="v-row">
+          <div class="v-lab"><span class="h-k">体力</span><b id="stnum">100</b></div>
+          <div class="v-bar v-st" id="stbar"><i style="width:100%"></i></div>
+        </div>
+        <div class="v-poison" id="poisonlab">⚠ 中毒 · 持续掉血</div>
+      </div>
+      <div class="h-ammo">
+        <div class="h-ammo-n" id="ammobig">30<small id="ammores"> / 90</small></div>
+        <div class="h-wep" id="weplab">步枪 <em>RIFLE</em></div>
+        <div class="h-hint" id="ammohint">子弹耗尽 · 按 Q 拔刀</div>
+      </div>
+      <div class="h-cross" id="cross"><i class="c-t"></i><i class="c-b"></i><i class="c-l"></i><i class="c-r"></i><i class="c-dot"></i></div>
+      <div class="h-hit" id="hitmark"><i></i><i></i><i></i><i></i></div>
+      <div class="h-dmg" id="dmgflash"></div>
+      <div class="h-lowhp" id="lowhp"></div>
+      <div class="h-prompt" id="prompt"><span class="pk" id="promptkey">E</span><span class="pt" id="prompttext"></span></div>
+      <div class="loc-card" id="loccard"><i></i><b id="locname"></b><span id="locsub"></span></div>
+      <div class="h-toasts" id="toasts"></div>
+    </div>
+
+    <!-- menus -->
+    <div class="menu" id="menu-title" data-screen="title">
+      <div class="m-veil"></div>
+      <div class="m-title">
+        <div class="m-title-main">
+          <div class="m-eyebrow"><span class="m-tag">第一人称生存</span><span class="h-k">Isle Escape</span></div>
+          <div class="m-word">绝岛密林<span class="m-subtitle">穿过密林 · 逃离孤岛</span></div>
+          <div class="m-premise">补给船在暗礁失事，你被冲上这座无名孤岛的南岸。北岸滩头有一只救援筏——但它隔着整座岛的原始密林：水塘边的棕熊、林间的狼群、沼泽里的鳄鱼、以及山腹洞穴中结网的巨蛛。带上步枪，子弹打空还有军刀。活着走到筏上，就能离开。</div>
+          <div class="m-actions">
+            <button class="btn primary" id="btn-start">开始逃生</button>
+            <button class="btn" id="btn-settings">设置</button>
+          </div>
+          <div class="m-note">鼠标视角 · WASD 移动 · SHIFT 疾跑 · 左键射击 · Q 拔刀 / 收枪 · R 换弹 · F 枪灯 · E 拾取 / 上筏 · ESC 暂停</div>
+        </div>
+      </div>
+      <div class="m-legend">
+        <div><em>步枪 / 军刀</em><span><kbd>1</kbd><kbd>2</kbd> 或 <kbd>Q</kbd> 切换</span></div>
+        <div><em>疾跑</em><span><kbd>SHIFT</kbd></span></div>
+        <div><em>换弹</em><span><kbd>R</kbd></span></div>
+        <div><em>枪灯（洞内）</em><span><kbd>F</kbd></span></div>
+        <div><em>拾取 / 上筏</em><span><kbd>E</kbd></span></div>
+      </div>
+    </div>
+
+    <div class="menu" id="menu-paused" data-screen="paused">
+      <div class="m-veil"></div>
+      <div class="m-card">
+        <div class="m-k">游戏暂停</div>
+        <div class="m-h">暂离密林</div>
+        <div class="m-line">野兽仍在林间游荡。深呼吸，然后回去。</div>
+        <div class="m-actions">
+          <button class="btn primary" id="btn-resume">继续</button>
+          <button class="btn" id="btn-settings2">设置</button>
+          <button class="btn" id="btn-restart1">重新开始</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="menu" id="menu-dead" data-screen="dead">
+      <div class="m-veil"></div>
+      <div class="m-card m-dead">
+        <div class="m-k">任务失败</div>
+        <div class="m-h">长眠孤岛</div>
+        <div class="m-line" id="dead-cause">你倒在了密林深处。</div>
+        <dl class="m-stats" id="dead-stats"></dl>
+        <div class="m-actions">
+          <button class="btn primary" id="btn-restart2">再来一次</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="menu" id="menu-complete" data-screen="complete">
+      <div class="m-veil"></div>
+      <div class="m-card">
+        <div class="m-k">任务完成</div>
+        <div class="m-h">成功逃离</div>
+        <div class="m-rating"><span>综合评价</span><b id="rating">S</b></div>
+        <dl class="m-stats" id="win-stats"></dl>
+        <div class="m-actions">
+          <button class="btn primary" id="btn-again">再玩一次</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- settings panel -->
+    <div class="panel" id="panel" hidden>
+      <div class="panel-h"><div class="m-k">设置</div><button class="panel-x" id="panel-close">✕ ESC</button></div>
+      <div class="panel-b">
+        <h3>操作</h3>
+        <div class="row">
+          <label>鼠标灵敏度</label>
+          <div class="slider"><input type="range" id="set-sens" min="0.4" max="3" step="0.1" value="1.4"><output id="out-sens">1.4</output></div>
+        </div>
+        <h3>画面</h3>
+        <div class="row">
+          <label>画质</label>
+          <div class="seg" id="set-quality">
+            <button data-q="0" aria-pressed="false">流畅</button>
+            <button data-q="1" aria-pressed="true">均衡</button>
+            <button data-q="2" aria-pressed="false">精美</button>
+          </div>
+        </div>
+        <div class="row">
+          <label class="toggle" id="set-touch"><i></i><span>触屏操作模式</span></label>
+        </div>
+        <h3>声音</h3>
+        <div class="row">
+          <label>音量</label>
+          <div class="slider"><input type="range" id="set-vol" min="0" max="1" step="0.05" value="0.7"><output id="out-vol">70%</output></div>
+        </div>
+        <h3>键位</h3>
+        <div class="keys">
+          <div><dt>移动</dt><dd><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dd></div>
+          <div><dt>疾跑</dt><dd><kbd>SHIFT</kbd></dd></div>
+          <div><dt>跳跃</dt><dd><kbd>SPACE</kbd></dd></div>
+          <div><dt>射击</dt><dd><kbd>左键</kbd></dd></div>
+          <div><dt>切刀 / 收枪</dt><dd><kbd>Q</kbd></dd></div>
+          <div><dt>步枪 / 军刀</dt><dd><kbd>1</kbd><kbd>2</kbd></dd></div>
+          <div><dt>换弹</dt><dd><kbd>R</kbd></dd></div>
+          <div><dt>枪灯</dt><dd><kbd>F</kbd></dd></div>
+          <div><dt>拾取 / 上筏</dt><dd><kbd>E</kbd></dd></div>
+          <div><dt>暂停</dt><dd><kbd>ESC</kbd></dd></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- touch controls -->
+    <div class="touch">
+      <div class="t-stick" id="t-stick"><i></i></div>
+      <div class="t-look" id="t-look"></div>
+      <div class="t-btns">
+        <button class="t-btn" data-k="knife">刀/枪</button>
+        <button class="t-btn" data-k="reload">换弹</button>
+        <button class="t-btn" data-k="jump">跳</button>
+        <button class="t-btn" data-k="interact">E</button>
+        <button class="t-btn fire" data-k="fire">射击</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="boot">
+    <div class="boot-mark">绝岛密林</div>
+    <div class="boot-sub" id="boot-msg">正在生成岛屿地形</div>
+    <div class="boot-bar"><i id="boot-fill"></i></div>
+  </div>
+  <div id="fatal"></div>
+</div>
+
+<script>
+  window.__errors = [];
+  window.addEventListener('error', e => {
+    window.__errors.push(String(e.message || e.error));
+    const f = document.getElementById('fatal');
+    f.classList.add('on');
+    f.textContent = window.__errors.join('\n');
+  });
+  window.addEventListener('unhandledrejection', e => {
+    window.__errors.push('REJECT: ' + String(e.reason));
+    const f = document.getElementById('fatal');
+    f.classList.add('on');
+  });
+</script>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
