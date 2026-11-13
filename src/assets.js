@@ -30,7 +30,10 @@ export const MANIFEST = {
   medkit:    { file: 'medkit.glb' }, // 急救箱拾取物：底部中心=原点，红十字盖朝上
   croc:      { file: 'croc.glb' },  // 沼泽鳄：头朝 +Z（野兽 AI 前进方向），底部中心=原点，体长已烘焙 3.6m
   spider:    { file: 'spider.glb' }, // 巨蛛：头朝 +Z（野兽前进方向），底部中心=原点
+  dino:      { file: 'dino.glb' },  // 迅猛龙：头朝 +Z（野兽 AI 前进方向），底部中心=原点，体长已烘焙 2.6m
+  wolf:      { file: 'wolf.glb' },  // 林狼：头朝 +Z（野兽 AI 前进方向），底部中心=原点，体长已烘焙 1.9m
   rock:      { file: 'rock.glb' },  // 岩石：底部中心=原点（植被/海滩石头共用），等比实例化
+  mutant:    { file: 'mutant.glb', height: 2.4 }, // 变异巨兽（替熊）：头朝 +Z，含 idle/swipe 两段骨骼动画
 };
 
 const cache = new Map();

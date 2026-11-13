@@ -21,7 +21,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const js = fs.readFileSync(path.join(root, 'bundle.js'), 'utf8');
 
 // —— 把 assets/*.glb 内联成 data URI，保证 dist 仍是单文件（无需服务器） ——
-const KNOWN = ['player', 'robot', 'rifle', 'knife', 'jeep', 'm151', 'cabin', 'medkit', 'croc', 'boat', 'spider', 'rock'];
+const KNOWN = ['player', 'robot', 'rifle', 'knife', 'jeep', 'm151', 'cabin', 'medkit', 'croc', 'boat', 'spider', 'rock', 'dino', 'mutant', 'wolf'];
 const assetData = {};
 if (!process.argv.includes('--no-assets')) {
   const dir = path.join(root, 'assets');
