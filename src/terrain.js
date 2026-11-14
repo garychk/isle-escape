@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import { CFG, POND, SWAMP, MOUNT, RAFT, SPAWN, TRAIL, TRAIL_W, CABIN } from './config.js';
 import { fbm, clamp, smoothstep, dist2, segDist2 } from './util.js';
-import { groundDetail, groundNormal, waterNormal } from './textures.js';
+import { groundDetail, groundNormal } from './textures.js';
+import { createWaterMaterial, setWaterTime } from './water.js';
 
 const R_ISLAND = 232, R_COAST = 198; // 岛屿半径 / 海岸线开始
 
@@ -109,6 +110,25 @@ export function groundHeight(x, z, bridgeSway = 0, curY = Infinity) {
   return h;
 }
 
+// —— 渲染网格高度（与 buildTerrain 的网格完全一致） ——
+// 地面网格是 230 段平面片，顶点精确、片内线性插值；baseHeight 在 2.43m 一格的
+// 噪声地形上最多能差 4m（隧道口那条窄沟尤其夸张）。所有"贴着地面摆"的物体
+// （树/石头/断桩/浮木）都必须用它定位，否则坡地和沟沿会明显悬空或半埋。
+const GRID_SEG = 230;
+const GRID_STEP = CFG.WORLD / GRID_SEG;
+const GRID_HALF = CFG.WORLD / 2;
+export const TERRAIN_SEG = GRID_SEG;
+export function terrainY(x, z) {
+  const fx = clamp((x + GRID_HALF) / GRID_STEP, 0, GRID_SEG - 1e-6);
+  const fz = clamp((z + GRID_HALF) / GRID_STEP, 0, GRID_SEG - 1e-6);
+  const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j;
+  const x0 = -GRID_HALF + i * GRID_STEP, z0 = -GRID_HALF + j * GRID_STEP;
+  const h00 = baseHeight(x0, z0), h10 = baseHeight(x0 + GRID_STEP, z0);
+  const h01 = baseHeight(x0, z0 + GRID_STEP), h11 = baseHeight(x0 + GRID_STEP, z0 + GRID_STEP);
+  const a = h00 + (h10 - h00) * u, b = h01 + (h11 - h01) * u;
+  return a + (b - a) * v;
+}
+
 export function trailDist(x, z) { // 到引导小径的距离
   let d = 1e9;
   for (let i = 0; i < TRAIL.length - 1; i++) {
@@ -127,11 +147,14 @@ const C_SAND = new THREE.Color(0xcbb894), C_GRASS = new THREE.Color(0x6d6c46),
       C_WETSAND = new THREE.Color(0xa89a78), C_HUMUS = new THREE.Color(0x82694c);
 
 export function buildTerrain(scene) {
-  const SEG = 230, S = CFG.WORLD;
+  const SEG = GRID_SEG, S = CFG.WORLD; // 与 terrainY() 共用同一套网格常量，禁止各自硬编码
   const geo = new THREE.PlaneGeometry(S, S, SEG, SEG);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
   const colors = new Float32Array(pos.count * 3);
+  // splat 权重：0=林地 1=泥土/小径 2=岩石 3=沙滩，供真实 PBR 的 4 路混合使用
+  // （程序化材质回退时忽略该属性）
+  const splats = new Float32Array(pos.count * 4);
   const c = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
@@ -176,8 +199,32 @@ export function buildTerrain(scene) {
     // 岩壁：额外的深浅斑块，避免大面积均色
     if (slope > 0.34) c.offsetHSL(0, 0, fbm(x * 0.42, z * 0.42, 3) * 0.085);
     colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+
+    // —— 真实 PBR 的 splat 权重：按"覆盖"依次叠加，天然保持四项和为 1 ——
+    const w = [1, 0, 0, 0];
+    const cover = (idx, a) => {
+      a = clamp(a, 0, 0.98);
+      for (let k = 0; k < 4; k++) w[k] *= 1 - a;
+      w[idx] += a;
+    };
+    const edge = fbm(x * 0.13 + 61, z * 0.13 - 23, 2) * 0.07; // 打散材质边界
+    // 泥土：引导小径 / 腐殖土斑块 / 沼泽泥泞
+    const trailAmt = smoothstep(TRAIL_W + 2.5, TRAIL_W * 0.3, td) * 0.9;
+    const humusAmt = smoothstep(0.20, 0.72, hum) * 0.52 + smoothstep(0.26, 0.80, hum2) * 0.18;
+    const mudAmt = smoothstep(52, 26, ds_(x, z)) * 0.72;
+    cover(1, Math.max(trailAmt, humusAmt, mudAmt) + edge);
+    // 岩石：陡坡 / 高山 / 洞穴走廊
+    cover(2, rockAmt * 1.06 + (inCaveCorr(x, z) ? 0.7 : 0) + edge);
+    // 沙滩：环岛海岸 + 水塘岸（沿用旧顶点色的判定条件）
+    let sandAmt = 0;
+    if (rd > 178) sandAmt = smoothstep(4.6, 1.7, h) * smoothstep(178, 196, rd);
+    sandAmt = Math.max(sandAmt, smoothstep(40, 24, pw) * smoothstep(3.8, 2.9, h) * 0.9);
+    cover(3, sandAmt + edge);
+    splats[i * 4] = w[0]; splats[i * 4 + 1] = w[1];
+    splats[i * 4 + 2] = w[2]; splats[i * 4 + 3] = w[3];
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.setAttribute('splat', new THREE.BufferAttribute(splats, 4));
   geo.computeVertexNormals();
   const detail = groundDetail();
   detail.repeat.set(70, 70);
@@ -193,58 +240,85 @@ export function buildTerrain(scene) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   scene.add(mesh);
+  buildWaterField();          // 水面距离场（水流环境音用）
   return mesh;
 }
 function ds_(x, z) { return dist2(x, z, SWAMP.x, SWAMP.z); }
 
-// —— 水面材质（法线波纹 + 太阳高光） ——
-function waterMaterial(color, opacity, repeat, rough = 0.16, nscale = 0.9) {
-  const n = waterNormal().clone();
-  n.needsUpdate = true;
-  n.repeat.set(repeat, repeat);
-  n.wrapS = n.wrapT = THREE.RepeatWrapping;
-  return new THREE.MeshStandardMaterial({
-    color, transparent: true, opacity,
-    roughness: rough, metalness: 0.4,
-    normalMap: n, normalScale: new THREE.Vector2(nscale, nscale),
-    depthWrite: false,
-  });
+// —— 水面：先按真实地形高度烘焙水深图，再由 water.js 做波纹/深浅/泡沫 ——
+// 水深图是让"平面水"显出浅滩、岸线白沫和水色层次的关键（纯贴图做不到）。
+function depthMap(w, d, cx, cz, y, scale, res) {
+  const data = new Uint8Array(res * res * 4);
+  for (let j = 0; j < res; j++) {
+    const z = cz + (j / (res - 1) - 0.5) * d;
+    for (let i = 0; i < res; i++) {
+      const x = cx + (i / (res - 1) - 0.5) * w;
+      const v = clamp((y - baseHeight(x, z)) / scale, 0, 1);
+      const k = (j * res + i) * 4;
+      data[k] = data[k + 1] = data[k + 2] = (v * 255) | 0;
+      data[k + 3] = 255;
+    }
+  }
+  const t = new THREE.DataTexture(data, res, res, THREE.RGBAFormat);
+  t.minFilter = t.magFilter = THREE.LinearFilter;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.needsUpdate = true;
+  return t;
 }
+
 const waters = [];
 // 给水面挂上天空环境贴图（PMREM），让海面真正映出天色而不是一片死绿
 export function setWaterEnv(tex) {
   if (!tex) return;
   // 大海主要映天光；水塘/沼泽被树冠遮着，反射要弱，否则会变成一片惨白
-  const inten = [1.15, 0.28, 0.22];
+  const inten = [0.92, 0.26, 0.20];
   waters.forEach((m, i) => {
     m.envMap = tex;
     m.envMapIntensity = inten[i] ?? 0.3;
-    m.metalness = i === 0 ? 0.45 : 0.05;
+    m.metalness = i === 0 ? 0.16 : 0.04;
     m.needsUpdate = true;
   });
 }
+
 export function buildWaters(scene) {
-  const mk = (w, d, x, z, y, color, op, rep) => {
-    const g = new THREE.PlaneGeometry(w, d, 1, 1);
-    const m = waterMaterial(color, op, rep);
+  const mk = (o) => {
+    const depth = depthMap(o.w, o.d, o.x, o.z, o.y, o.depthScale, o.depthRes);
+    const m = createWaterMaterial({
+      depth, center: [o.x, o.z], size: [o.w, o.d],
+      deep: o.deep, shallow: o.shallow, opacity: o.opacity,
+      rough: o.rough, metalness: o.metalness,
+      nrmScale: o.nrmScale, ripple: o.ripple, wave: o.wave, foam: o.foam,
+      sunGloss: o.sunGloss, sunStrength: o.sunStrength,
+    });
+    const g = new THREE.PlaneGeometry(o.w, o.d, o.seg, o.seg);
     const mesh = new THREE.Mesh(g, m);
     mesh.rotation.x = -Math.PI / 2;
-    mesh.position.set(x, y, z);
+    mesh.position.set(o.x, o.y, o.z);
     mesh.renderOrder = 2;
     scene.add(mesh);
     waters.push(m);
     return mesh;
   };
-  mk(CFG.WORLD * 1.9, CFG.WORLD * 1.9, 0, 0, CFG.SEA_Y, 0x2c5158, 0.97, 180, 0.2, 1.25);   // 大海
-  mk(112, 104, POND.x, POND.z, CFG.POND_Y, 0x2f4f46, 0.88, 30, 0.12, 0.7);     // 水塘
-  mk(132, 138, SWAMP.x, SWAMP.z, CFG.SWAMP_Y, 0x414d28, 0.94, 34, 0.3, 0.8);    // 沼泽
+  // 大海：长涌浪 + 强天光反射
+  mk({ w: CFG.WORLD * 1.9, d: CFG.WORLD * 1.9, x: 0, z: 0, y: CFG.SEA_Y, seg: 128,
+    depthScale: 7, depthRes: 512,
+    deep: 0x0d3440, shallow: 0x3e8c8b, opacity: 0.93, rough: 0.17, metalness: 0.16,
+    nrmScale: 0.032, ripple: 0.85, wave: 1.0, foam: 0.7,
+    sunGloss: 110, sunStrength: 0.85 });
+  // 水塘：树荫下的静水，涟漪更细
+  mk({ w: 112, d: 104, x: POND.x, z: POND.z, y: CFG.POND_Y, seg: 48,
+    depthScale: 1.8, depthRes: 192,
+    deep: 0x173c33, shallow: 0x4c7d61, opacity: 0.88, rough: 0.18, metalness: 0.05,
+    nrmScale: 0.10, ripple: 0.55, wave: 0.5, foam: 0.75,
+    sunGloss: 70, sunStrength: 0.35 });
+  // 沼泽：浑水、几乎无浪
+  mk({ w: 132, d: 138, x: SWAMP.x, z: SWAMP.z, y: CFG.SWAMP_Y, seg: 48,
+    depthScale: 1.1, depthRes: 192,
+    deep: 0x26331d, shallow: 0x5c6a38, opacity: 0.94, rough: 0.28, metalness: 0.03,
+    nrmScale: 0.14, ripple: 0.38, wave: 0.32, foam: 0.4,
+    sunGloss: 55, sunStrength: 0.15 });
 }
-export function updateWaters(t) {
-  for (const m of waters) {
-    const n = m.normalMap;
-    n.offset.set(t * 0.018 + m.id * 0.01, t * 0.011);
-  }
-}
+export function updateWaters(t) { setWaterTime(t); }
 
 // —— 区域判定（供游戏逻辑） ——
 export function zoneState(x, z) {
@@ -255,4 +329,77 @@ export function zoneState(x, z) {
   const onBoard = Math.abs(x - 86) < 2.4 && z < 96 && z > 10;
   const deep = dist2(x, z, 0, 0) > CFG.DEEP_R || (baseHeight(x, z) < -1.5 && dist2(x, z, 0, 0) > 215);
   return { pondD, swampD, inWater, inSwampWater, onBoard, deep, cave: inCaveDark(x, z) };
+}
+
+// —— 到水面的距离场（供水流环境音） ——
+// 启动时按 160×160 格烘焙一次「每格到最近水域的平面距离 + 水深」，运行时双线性采样，
+// 每帧零地形计算开销。岸线就是"地形高度 < 水面高度"的那条线，所以格内直接比高度即可。
+const WD_N = 160;                              // 网格精度：560m / 160 ≈ 3.5m
+const WD_CELL = CFG.WORLD / (WD_N - 1);
+let wdDist = null, wdDepth = null;             // 单位：米
+export const WD_MAX = 30;
+
+export function buildWaterField() {
+  const N = WD_N, total = N * N;
+  const dist = new Float32Array(total), depth = new Float32Array(total);
+  const INF = 1e9;
+  for (let j = 0; j < N; j++) {
+    const z = -CFG.WORLD / 2 + j * WD_CELL;
+    for (let i = 0; i < N; i++) {
+      const x = -CFG.WORLD / 2 + i * WD_CELL;
+      const h = baseHeight(x, z);
+      // 该格归属的水面：沼泽 > 水塘 > 海（就近覆盖）
+      let level = CFG.SEA_Y;
+      if (dist2(x, z, SWAMP.x, SWAMP.z) < 52) level = CFG.SWAMP_Y;
+      else if (dist2(x, z, POND.x, POND.z) < 42) level = CFG.POND_Y;
+      const k = j * N + i;
+      if (h <= level) { dist[k] = 0; depth[k] = level - h; }
+      else { dist[k] = INF; depth[k] = 0; }
+    }
+  }
+  // 倒角距离变换（两遍扫描，1/√2 权重），得到每格到最近水格的格数
+  const D1 = 1, D2 = Math.SQRT2;
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const k = j * N + i, v = dist[k];
+      if (v === 0) continue;
+      let m = v;
+      if (i > 0) m = Math.min(m, dist[k - 1] + D1);
+      if (j > 0) {
+        m = Math.min(m, dist[k - N] + D1);
+        if (i > 0) m = Math.min(m, dist[k - N - 1] + D2);
+        if (i < N - 1) m = Math.min(m, dist[k - N + 1] + D2);
+      }
+      dist[k] = m;
+    }
+  }
+  for (let j = N - 1; j >= 0; j--) {
+    for (let i = N - 1; i >= 0; i--) {
+      const k = j * N + i, v = dist[k];
+      if (v === 0) continue;
+      let m = v;
+      if (i < N - 1) m = Math.min(m, dist[k + 1] + D1);
+      if (j < N - 1) {
+        m = Math.min(m, dist[k + N] + D1);
+        if (i < N - 1) m = Math.min(m, dist[k + N + 1] + D2);
+        if (i > 0) m = Math.min(m, dist[k + N - 1] + D2);
+      }
+      dist[k] = m;
+    }
+  }
+  for (let k = 0; k < total; k++) dist[k] = Math.min(WD_MAX, dist[k] * WD_CELL);
+  wdDist = dist; wdDepth = depth;
+  console.log('[terrain] 水面距离场已烘焙 ' + N + '×' + N);
+}
+
+// 双线性采样：{ dist: 离最近水面的米数（0=水中）, depth: 水深(m) }
+export function waterDistance(x, z) {
+  if (!wdDist) return { dist: WD_MAX, depth: 0 };
+  const fx = clamp((x + CFG.WORLD / 2) / WD_CELL, 0, WD_N - 1.001);
+  const fz = clamp((z + CFG.WORLD / 2) / WD_CELL, 0, WD_N - 1.001);
+  const i = fx | 0, j = fz | 0, u = fx - i, v = fz - j;
+  const N = WD_N, k = j * N + i;
+  const b = (a, kk) => a[kk] * (1 - u) * (1 - v) + a[kk + 1] * u * (1 - v)
+    + a[kk + N] * (1 - u) * v + a[kk + N + 1] * u * v;
+  return { dist: b(wdDist, k), depth: b(wdDepth, k) };
 }

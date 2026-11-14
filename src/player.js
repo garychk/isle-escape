@@ -1,7 +1,7 @@
 // 玩家：第一人称控制 / 步枪 + 军刀 / 生命体力 / 拾取 / 受击与中毒
 import * as THREE from 'three';
 import { CFG, RAFT, BOAT, PICKUPS, POND, SWAMP } from './config.js';
-import { clamp, dist2 } from './util.js';
+import { clamp, dist2, pushOutCircles } from './util.js';
 import { groundHeight, zoneState } from './terrain.js';
 import { colliders } from './flora.js';
 import { sfx } from './audio.js';
@@ -52,6 +52,9 @@ export class Player {
     const medMat = new THREE.MeshStandardMaterial({ color: 0xd8d4c8, roughness: 0.7 });
     const redMat = new THREE.MeshStandardMaterial({ color: 0xc4392a, roughness: 0.7 });
     for (const [x, z, type] of PICKUPS) {
+      // 植被碰撞圈较大（巨树 ~2.5m），若拾取点落在圈内会永远够不着 → 先推出碰撞圈
+      const pushed = pushOutCircles(x, z, 0.55, colliders);
+      const px = pushed ? pushed[0] : x, pz = pushed ? pushed[1] : z;
       const g = new THREE.Group();
       if (type === 'ammo') {
         const box = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 0.35), ammoMat);
@@ -71,14 +74,14 @@ export class Player {
         }
       }
       // 悬浮高度：地形之上；若点位落在水域（海/水塘/沼泽），则浮到水面之上，避免沉底
-      const gy = groundHeight(x, z);
+      const gy = groundHeight(px, pz);
       let wy = CFG.SEA_Y;
-      if (dist2(x, z, POND.x, POND.z) < 52 && gy < CFG.POND_Y) wy = CFG.POND_Y;
-      if (dist2(x, z, SWAMP.x, SWAMP.z) < 66 && gy < CFG.SWAMP_Y) wy = CFG.SWAMP_Y;
-      g.position.set(x, Math.max(gy, wy) + 0.35, z);
+      if (dist2(px, pz, POND.x, POND.z) < 52 && gy < CFG.POND_Y) wy = CFG.POND_Y;
+      if (dist2(px, pz, SWAMP.x, SWAMP.z) < 66 && gy < CFG.SWAMP_Y) wy = CFG.SWAMP_Y;
+      g.position.set(px, Math.max(gy, wy) + 0.35, pz);
       g.rotation.y = Math.random() * 6.28;
       scene.add(g);
-      this.pickups.push({ x, z, type, mesh: g, taken: false });
+      this.pickups.push({ x: px, z: pz, type, mesh: g, taken: false });
     }
 
     // 枪灯挂在场景里，每帧跟随角色手里那把枪（不再有第一人称视模型）
@@ -122,6 +125,11 @@ export class Player {
   // 射击（左键）
   tryFire(time) {
     if (this.reloadT > 0 || this.fireCd > 0 || this.win) return;
+    // 空手：没有武器可挥，给一次提示就好（1.2s 节流，避免连点刷屏）
+    if (this.wep === 'none') {
+      if (this.fireCd <= 0) { this.fireCd = 1.2; this.ui.toast('空手 · 按 Q 取出武器', true); }
+      return;
+    }
     if (this.wep === 'rifle') {
       if (this.mag <= 0) {
         sfx.dryfire(); this.fireCd = 0.25; this.ui.hintEmpty(true);
@@ -198,19 +206,33 @@ export class Player {
   switchWep(w) {
     if (this.reloadT > 0 || w === this.wep) return;
     this.wep = w;
-    // 军刀没有抵肩瞄准姿态，切刀时解除锁定
-    if (w === 'knife' && this.aimLatch) { this.aimLatch = false; this.aiming = this.aimHold; }
+    // 军刀 / 空手都没有抵肩瞄准姿态：切过去时解除锁定；空手时连右键瞄准也停掉
+    if (w !== 'rifle') {
+      this.aimLatch = false;
+      if (w === 'none') this.aimHold = false;
+      this.aiming = w === 'none' ? false : this.aimHold;
+    } else {
+      this.aiming = this.aimHold || this.aimLatch;
+    }
     if (this.tps && this.tps.char) this.tps.char.setWeapon(w);
     sfx.uiclick();
     this.ui.updateWep(this);
   }
-  /** 按住瞄准（右键）：与锁定状态取并集 */
+  /** Q 键循环切换：步枪 → 军刀 → 空手 → 步枪 */
+  cycleWep() {
+    const order = ['rifle', 'knife', 'none'];
+    const i = order.indexOf(this.wep);
+    this.switchWep(order[(i + 1) % order.length]);
+    return this.wep;
+  }
+  /** 按住瞄准（右键）：与锁定状态取并集；空手时无效 */
   setAimHold(v) {
-    this.aimHold = !!v;
-    this.aiming = this.aimHold || this.aimLatch;
+    this.aimHold = !!v && this.wep !== 'none';
+    this.aiming = this.aimHold || (this.aimLatch && this.wep !== 'none');
   }
   /** 切换常驻瞄准（V 键）：不用一直按着右键 */
   toggleAimLatch() {
+    if (this.wep === 'none') { this.aiming = false; return false; }   // 空手没有枪可瞄
     this.aimLatch = !this.aimLatch;
     this.aiming = this.aimHold || this.aimLatch;
     return this.aimLatch;
@@ -248,6 +270,7 @@ export class Player {
     if (zone.inSwampWater && !zone.onBoard) spd = CFG.SWAMP_WALK;
     else if (zone.inWater) spd *= 0.62;
     if (this.wep === 'knife') spd *= 1.12;
+    else if (this.wep === 'none') spd *= 1.15;   // 空手轻装，略快于持械
     if (this.aiming) spd *= 0.55;
     if (this.isSneaking) spd *= CFG.CROUCH_MULT;
 
@@ -267,14 +290,8 @@ export class Player {
     // —— 碰撞 ——
     let nx = this.pos.x + mx, nz = this.pos.z + mz;
     const PR = 0.45;
-    for (const c of colliders) {
-      const d = dist2(nx, nz, c.x, c.z);
-      if (d < c.r + PR) {
-        const a = Math.atan2(nx - c.x, nz - c.z);
-        nx = c.x + Math.sin(a) * (c.r + PR);
-        nz = c.z + Math.cos(a) * (c.r + PR);
-      }
-    }
+    const pushed = pushOutCircles(nx, nz, PR, colliders);
+    if (pushed) { nx = pushed[0]; nz = pushed[1]; }
     // 深海阻挡
     if (zone.deep) {
       const a = Math.atan2(nx, nz);

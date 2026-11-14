@@ -79,6 +79,8 @@ src/                游戏源码
   vehicle.js        载具
   tps.js            第三人称相机
   env.js            天空、昼夜、天气、雨、萤火虫
+  pbr.js            Poly Haven PBR 贴图、地形 splat、HDRI 环境光
+  water.js          水面着色器（三频波纹、水深、岸线泡沫、Schlick 菲涅尔、太阳碎金高光）
   audio.js          WebAudio 音效与环境音乐
   ui.js             HUD、菜单、指南针、区域名卡
   assets.js         GLB 装载、尺度归一、实例化
@@ -94,6 +96,11 @@ tools/              美术资产管线脚本
 - `tools/blender/*.py` —— 在 Blender 后台生成木屋、步枪、合并 Mixamo 动画、批量预览等。
 - `tools/merge-character.bat` —— Windows 一键把 `assets_src/mixamo/*.fbx` 合并成带骨骼动画的 `assets/player.glb`（需本机装有 Blender）。
 - `tools/glb_info.js`、`tools/shrink_glb.py` —— 查看 GLB 结构 / 压缩体积。
+- `tools/convert_verdant.py` —— 把 Poly Haven「A Verdant Trail」(CC0) 原图转成 `assets/tex/` 下的 1K 地面 PBR、植被 RGBA 与 `sky.hdr`。
+- `tools/make_water.py` —— 生成 `assets/tex/water_norm.png`（1024² 无缝水面法线 + 泡沫掩码，RGB 三通道，无 alpha）。**素材包里没有水面贴图**（`water_tmp` 只是 Glass BSDF + Noise Bump 的纯节点材质），水面质感由该贴图与 `src/water.js` 的着色器共同实现；贴图缺失时自动回退程序化法线。
+- `tools/make_reef_tex.py` + `tools/blender/build_reef.py` —— 把 `drone-island.fbx`（航拍扫描礁石小岛，125.7 万面 / 2 张 8K 正射贴图）转成 `assets/reef.glb`：贴图降到 2K、减面到 9.4 万、航拍水线归零（`y<0` 是水下礁盘，由游戏海面盖住）。南岸旧的纯色圆柱船体 + 5 根半圆环船肋 + 断桅杆已删除，改由 `src/structures.js` 的 `buildOffshoreReefs()` 放 1 块近岸搁浅礁 + 2 座外海离岸岛。
+- `tools/blender/preview_reef.py` —— Blender Workbench 多角度预览扫描地形形态与水线。
+- `assets/tex/` 由 `build.js` 递归拷进 `dist/assets/tex/`，新增贴图无需改构建脚本。
 - `tools/fix_hips_offset.js` —— 修正 Mixamo 骨架的髋部偏移。
 
 ## 技术栈

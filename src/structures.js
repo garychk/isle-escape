@@ -421,25 +421,49 @@ export function updateRaft(t) {
   boatGroup.rotation.x = Math.sin(t * 0.53) * 0.012;
 }
 
-// ================= 南岸遇难残骸 =================
-function buildWreck(g) {
-  const hullMat = new THREE.MeshStandardMaterial({ color: 0x6b5540, roughness: 0.95, flatShading: true });
-  const hull = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.7, 7.2, 9, 1, true), hullMat);
-  hull.rotation.set(0, 0.9, Math.PI / 2 - 0.22);
-  hull.position.set(-10, 1.2, 211);
-  hull.castShadow = true;
-  g.add(hull);
-  const ribMat = new THREE.MeshStandardMaterial({ color: 0x4e3c2a, roughness: 1 });
-  for (let i = 0; i < 5; i++) {
-    const rib = new THREE.Mesh(new THREE.TorusGeometry(2.2, 0.13, 5, 10, Math.PI), ribMat);
-    rib.position.set(-13 + i * 1.5, 1.7, 209 + i * 0.9);
-    rib.rotation.set(0.1, 0.9, 0.35);
-    g.add(rib);
+// ================= 南岸遇难现场（真实礁石 + 冲上岸的残骸） =================
+// 旧版是「9 边圆柱船体 + 5 根半圆环船肋 + 一根断桅杆」的纯色低模，和 PBR 沙滩同框非常突兀，已整体删除。
+// 现在用 D:/Downloads/ocean_rocky_island 的航拍扫描礁石（assets/reef.glb）：
+// 近岸一块搁浅礁（就在旧沉船外侧）+ 外海两座离岸岛。GLB 原点=航拍水线，
+// y<0 的水下礁盘被游戏海面盖住，y>0 的岩峰与植被自然出水。
+export const reefState = { instances: 0, missing: false, skipped: false, placements: [] };
+
+const REEF_SPOTS = [
+  // 三座都放在深海边界（半径 250）之外，玩家到不了，避免相机钻进礁石模型看到背面
+  { x: 0, z: 278, s: 0.13, rot: 0.6 },       // 近岸礁：正对出生点，替代原来那堆假船肋
+  { x: -95, z: 320, s: 0.26, rot: 2.4 },    // 外海中岛
+  { x: 135, z: 385, s: 0.34, rot: -1.1 },   // 外海远岛
+];
+
+function buildOffshoreReefs(g) {
+  // 隔离调试：?noreef=1 只关离岸礁岛，方便和旧版画面对比
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('noreef')) {
+    reefState.skipped = true;
+    return;
   }
-  // 冲上岸的补给箱：木纹 + 歪斜 + 半埋进沙里，避免像摆在地上的纯色方盒
-  const crateMat = new THREE.MeshStandardMaterial({ map: barkTex(), color: 0x9c8154, roughness: 0.96 });
-  const bandMat = new THREE.MeshStandardMaterial({ color: 0x4a3a26, roughness: 1 });
-  for (let i = 0; i < 6; i++) {
+  for (const r of REEF_SPOTS) {
+    const inst = instance('reef');
+    if (!inst) { reefState.missing = true; console.warn('[structures] reef.glb 缺失，跳过离岸礁岛'); break; }
+    const w = inst.wrap;
+    w.position.set(r.x, CFG.SEA_Y, r.z);
+    w.scale.setScalar(r.s);
+    w.rotation.y = r.rot;
+    // 大范围地形块不投影：方向光阴影相机只覆盖玩家附近，强开会在海面拉出假阴影
+    w.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; } });
+    g.add(w);
+    reefState.instances++;
+    reefState.placements.push({ x: r.x, z: r.z, s: r.s });
+    // 只有近岸这块在玩家可达范围内，给个圆形碰撞免得穿进礁石
+    if (r.collider) colliders.push({ x: r.x, z: r.z, r: r.collider });
+  }
+}
+
+function buildWreck(g) {
+  buildOffshoreReefs(g);
+  // 撞礁后冲上岸的补给箱：浅木纹 + 歪斜 + 半埋进沙里
+  const crateMat = new THREE.MeshStandardMaterial({ map: woodGrain(), color: 0xe6d3b0, roughness: 0.96 });
+  const bandMat = new THREE.MeshStandardMaterial({ color: 0x6b5236, roughness: 1 });
+  for (let i = 0; i < 4; i++) {
     const x = -22 + rng() * 12, z = 194 + rng() * 13;
     const w = 0.8 + rng() * 0.45, h = 0.62 + rng() * 0.16;
     const crate = new THREE.Group();
@@ -450,12 +474,36 @@ function buildWreck(g) {
       const band = new THREE.Mesh(new THREE.BoxGeometry(w * 1.02, 0.07, w * 0.94), bandMat);
       band.position.y = h * k; crate.add(band);
     }
-    crate.position.set(x, baseHeight(x, z) + h * 0.34, z);
+    crate.position.set(x, baseHeight(x, z) + h * 0.24, z);
     crate.rotation.set((rng() - 0.5) * 0.28, rng() * 6.28, (rng() - 0.5) * 0.3);
     g.add(crate);
   }
-  // 断裂桅杆
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 6, 6), ribMat);
-  m.position.set(-4, 2.2, 206); m.rotation.set(0.9, 0.4, 1.1);
-  g.add(m);
+  buildWreckRocks(g);
+}
+
+// 撞碎船体的那片礁石：用带 PBR 贴图的 rock.glb 几何，半埋进沙里
+// （旧的纯色圆柱船体 / 半圆环船肋 / 断桅杆已全部删除，木板条会悬空，也不再用）
+function buildWreckRocks(g) {
+  const inst = instance('rock');
+  if (!inst) return;
+  let geo = null;
+  inst.wrap.traverse(o => { if (!geo && o.isMesh && o.geometry) geo = o.geometry; });
+  if (!geo) return;
+  geo = geo.clone();
+  geo.computeBoundingBox();
+  const b = geo.boundingBox;
+  geo.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+  const mat = new THREE.MeshStandardMaterial({ map: rockTex(), color: 0xe0d8c8, roughness: 0.96 });
+  const ROCKS = [
+    [-16, 211, 1.9], [-9, 215, 1.5], [-20, 218, 1.7], [-5, 207, 1.3], [-13, 222, 1.8],
+  ];
+  for (const [x, z, s] of ROCKS) {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, baseHeight(x, z) - 0.30 * s, z);
+    m.scale.set(s, s * 0.85, s * 0.95);
+    m.rotation.set((rng() - 0.5) * 0.14, rng() * 6.28, (rng() - 0.5) * 0.14);
+    m.castShadow = m.receiveShadow = true;
+    g.add(m);
+    colliders.push({ x, z, r: 1.0 * s });
+  }
 }

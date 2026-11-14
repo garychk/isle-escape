@@ -1,7 +1,7 @@
 // 野兽：程序化建模（狼/棕熊/沼泽鳄/巨蛛）+ AI 状态机 + 血液粒子
 import * as THREE from 'three';
 import { BEASTS, BEAST_SPAWNS } from './config.js';
-import { mulberry32, clamp, dist2 } from './util.js';
+import { mulberry32, clamp, dist2, pushOutCircles } from './util.js';
 import { groundHeight } from './terrain.js';
 import { colliders } from './flora.js';
 import { instance } from './assets.js';
@@ -615,16 +615,9 @@ export class BeastManager {
 
   moveBeast(b, dx, dz, dt, ignoreBlock = false) {
     const nx = b.x + dx, nz = b.z + dz;
-    // 碰撞体推出
-    let cx = nx, cz = nz;
-    for (const c of colliders) {
-      const d = dist2(cx, cz, c.x, c.z);
-      if (d < c.r + 0.5) {
-        const a = Math.atan2(cx - c.x, cz - c.z);
-        cx = c.x + Math.sin(a) * (c.r + 0.5);
-        cz = c.z + Math.cos(a) * (c.r + 0.5);
-      }
-    }
+    // 碰撞体推出（深者优先，防挤压甩穿）
+    const pushed = pushOutCircles(nx, nz, 0.5, colliders);
+    let cx = pushed ? pushed[0] : nx, cz = pushed ? pushed[1] : nz;
     b.x = cx; b.z = cz;
     const gy = groundHeight(b.x, b.z, 0, b.y);
     if (!ignoreBlock) {

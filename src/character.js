@@ -7,6 +7,9 @@ import { buildRifle, buildKnife } from './weapons.js';
 // 动画别名表：GLB 里的 clip 名只要命中正则就能挂上对应动作
 // 顺序有讲究：带方向后缀的必须排在 walk / run 前面，否则 walk_back 会被 /walk/ 抢走
 const ALIAS = [
+  // 空手走跑（Standard Walk / Running，武器收起时用）：必须排在 run / walk 前面
+  ['run_unarmed', /unarm.*run|run.*unarm/i],
+  ['walk_unarmed', /unarm.*walk|walk.*unarm/i],
   ['run', /run|sprint|jog_?fast/i],
   ['aimWalk', /aim[_ ]?walk/i],   // 必须排在 walk 前，否则 aim_walk 会被 /walk/ 吞掉
   ['walk', /walk|jog/i],
@@ -44,10 +47,14 @@ const NATIVE_SPEED = {
   walk: 1.97, run: 6.68, walk_back: 2.17, run_back: 2.9,
   strafe_l: 1.9, strafe_r: 1.9, crouchwalk: 1.1, crouchidle: 1.0,
   aimwalk: 0.58,   // 瞄准战术步行（Walk Forward，Blender 实测根位移 0.58 m/s）
+  // 空手走跑（标准 Walk / Running，原地动画，无根位移）：
+  // 用"支撑相脚掌相对身体的后移速度"实测，并用 walk/run 的已知根位移速度定标
+  walk_unarmed: 2.50, run_unarmed: 7.60,
 };
 
 // 属于"位移循环"的剪辑：切换时沿用彼此的相位，脚不跳
-const LOCO = new Set(['walk', 'run', 'walk_back', 'run_back', 'strafe_l', 'strafe_r', 'crouchWalk', 'crouchIdle', 'aimWalk']);
+const LOCO = new Set(['walk', 'run', 'walk_back', 'run_back', 'strafe_l', 'strafe_r',
+  'crouchWalk', 'crouchIdle', 'aimWalk', 'walk_unarmed', 'run_unarmed']);
 
 // _poseWeapon / IK 用的临时对象（避免每帧分配）
 const _vA = new THREE.Vector3(), _vB = new THREE.Vector3(), _vC = new THREE.Vector3(), _vD = new THREE.Vector3();
@@ -594,7 +601,12 @@ export class Character {
     }
 
     if (st.moving) {
-      const k = st.sprint && has('run') ? 'run' : (has('walk') ? 'walk' : 'run');
+      // 空手（wep='none'）：换 Standard Walk / Running 的放松步态；
+      // 拿着武器时仍用持械走跑，避免枪在手里却像散步一样甩臂
+      const un = !this.wep || this.wep === 'none';
+      const runK = un && has('run_unarmed') ? 'run_unarmed' : 'run';
+      const walkK = un && has('walk_unarmed') ? 'walk_unarmed' : 'walk';
+      const k = st.sprint && has(runK) ? runK : (has(walkK) ? walkK : runK);
       this.play(k, 0.14, false, true);
       return;
     }

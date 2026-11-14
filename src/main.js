@@ -1,16 +1,19 @@
 // 主入口：渲染 / 光照 / 状态机 / 主循环
 import * as THREE from 'three';
 import { CFG, SPAWN } from './config.js';
-import { buildTerrain, buildWaters, setWaterEnv, updateWaters, zoneState, groundHeight } from './terrain.js';
-import { buildFlora } from './flora.js';
-import { buildStructures, bridgeState, bridgePlanks, updateRaft } from './structures.js';
+import { buildTerrain, buildWaters, setWaterEnv, updateWaters, zoneState, groundHeight, waterDistance } from './terrain.js';
+import { buildFlora, colliders } from './flora.js';
+import { buildStructures, bridgeState, bridgePlanks, updateRaft, reefState } from './structures.js';
 import { BeastManager, makeParticles, updateParticles } from './animals.js';
 import { Env } from './env.js';
 import { Player } from './player.js';
 import { UI } from './ui.js';
 import { TPS } from './tps.js';
 import { loadAssets, setAssetEnv } from './assets.js';
-import { resume, startAmbient, startBGM, setCombat, setCaveAmbience, setRain, thunder, sfx, bgmState, sfxState, engineState } from './audio.js';
+import { loadPBR, applyTerrainPBR, loadSkyEnv } from './pbr.js';
+import { setTextureOverride } from './textures.js';
+import { loadWaterTextures, bindWaterEnv, waterState } from './water.js';
+import { resume, startAmbient, startBGM, setCombat, setCaveAmbience, setRain, setWaterNear, waterAmbState, thunder, sfx, bgmState, sfxState, engineState } from './audio.js';
 import { clamp } from './util.js';
 
 const canvas = document.getElementById('view');
@@ -35,6 +38,7 @@ const scene = new THREE.Scene();
 const env = new Env({ scene, renderer });
 env.onRain = lv => setRain(lv);
 env.onThunder = d => thunder(d);
+bindWaterEnv(env);   // 水面太阳高光跟随真实 DirectionalLight（昼夜/云雨/洞穴）
 
 // 用天空生成一张环境贴图，供水面反射用
 let envTex = null;
@@ -67,14 +71,25 @@ function step(msg, pct) {
   return new Promise(res => { bootMsg.textContent = msg; bootFill.style.width = pct + '%'; requestAnimationFrame(() => setTimeout(res, 30)); });
 }
 
+let pbrState = { ground: false, foliage: [], env: false };
 async function boot() {
+  await step('正在装载地表与天空材质', 8);
+  // 真实 PBR 贴图：缺文件时 loadPBR 返回 null，地形/植被自动回退程序化版本
+  const qs = new URLSearchParams(location.search);
+  const noPBR = qs.has('nopbr');                 // QA/调试：全部回退程序化材质
+  const pbr = noPBR ? { ground: null, foliage: {} } : await loadPBR();
+  if (!qs.has('nofoliage')) for (const [k, t] of Object.entries(pbr.foliage)) setTextureOverride(k, t);
+  pbrState.foliage = Object.keys(pbr.foliage);
   await step('正在生成岛屿地形', 12);
   env.sample();
   const terrain = buildTerrain(scene);
+  pbrState.ground = !qs.has('noground') && applyTerrainPBR(terrain, pbr.ground);
   env.terrainMat = terrain.material;
+  await loadWaterTextures(qs.has('nowater'));   // ?nowater 强制回退程序化法线，便于前后对比
   buildWaters(scene);
   rebuildEnvMap();
   setAssetEnv(envTex);
+  pbrState.env = (noPBR || qs.has('nohdr')) ? false : !!(await loadSkyEnv(renderer, scene));
   await step('正在装载外部美术资产', 30);
   const artInfo = await loadAssets(undefined, (p, name) => {
     bootMsg.textContent = '正在装载 ' + name + '.glb';
@@ -177,8 +192,15 @@ window.__qa = {
     }
   },
   state: () => state,
+  pbr: () => ({ ...pbrState, envIntensity: scene.environmentIntensity, terrainMat: env.terrainMat && !!env.terrainMat.onBeforeCompile }),
   bgm: bgmState,
   sfx: sfxState,
+  water: waterState,
+  waterAmb: waterAmbState,
+  reef: reefState,
+  waterTest: (lv) => setWaterNear(lv),
+  shore: (x, z) => waterDistance(x == null ? player.pos.x : x, z == null ? player.pos.z : z),
+  colliders: () => colliders,
   engine: engineState,
   setCombat,
 };
@@ -193,9 +215,13 @@ addEventListener('keydown', e => {
   }
   player.keys[e.code] = true;
   if (state !== 'playing') { if (e.code === 'Escape' && state === 'paused') game.resume(); return; }
-  if (e.code === 'KeyQ') player.switchWep(player.wep === 'rifle' ? 'knife' : 'rifle');
+  if (e.code === 'KeyQ') {
+    const w = player.cycleWep();
+    ui && ui.toast(w === 'none' ? '已收起武器 · 空手' : w === 'knife' ? '已拔刀' : '已举枪');
+  }
   if (e.code === 'Digit1') player.switchWep('rifle');
   if (e.code === 'Digit2') player.switchWep('knife');
+  if (e.code === 'Digit3') player.switchWep('none');
   if (e.code === 'KeyR') player.reload();
   if (e.code === 'KeyF') player.toggleFlash();
   // 瞄准锁定：点一下常驻瞄准，不用一直按着右键
@@ -244,6 +270,7 @@ addEventListener('resize', () => {
 let lastT = performance.now();
 let caveBlend = 0;
 let lastCombatT = -99;
+let waterProbeT = 0;
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
@@ -251,7 +278,6 @@ function loop() {
   lastT = now;
   const t = now / 1000;
 
-  updateWaters(t);
   updateRaft(t);
   if (particles) updateParticles(dt);
 
@@ -276,6 +302,16 @@ function loop() {
     ui.checkZones(player.pos.x, player.pos.z);
     ui.updateCompass(player.yaw, player.pos.x, player.pos.z);
     setCaveAmbience(zone.cave);
+    // 水流声：离水面越近越响、越清亮；站在水里再加一层贴脸的水花声
+    waterProbeT += dt;
+    if (waterProbeT > 0.12) {
+      waterProbeT = 0;
+      const wd = waterDistance(player.pos.x, player.pos.z);
+      let lv = Math.exp(-wd.dist / 7.0);                                        // 0m→1 / 7m→0.37 / 15m→0.12 / 28m→0.02
+      if (wd.depth > 0.03) lv = Math.max(lv, 0.86 + Math.min(0.14, wd.depth * 0.22));
+      if (zone.cave) lv *= 0.12;                                               // 洞里几乎传不进来
+      setWaterNear(lv < 0.02 ? 0 : lv);
+    }
     // BGM 战斗切换：有任一活兽处于 aggro 即视为遭遇战；脱离后延迟 5s 回探索层
     if (beasts) {
       const fighting = beasts.beasts.some(b => b.aggro && b.state !== 'dead');
@@ -297,9 +333,14 @@ function loop() {
     camera.lookAt(SPAWN.x, 3.4, SPAWN.z - 26);
     if (ui.updateAlmanac) ui.updateAlmanac(env);
   }
-
+  else setWaterNear(0);        // 标题 / 暂停 / 结算：水流声淡出
   // 环境：昼夜 + 天气（内部处理天穹跟随、光照、雾、雨）
   env.update(dt, camera.position, caveBlend);
+  // 水面太阳高光必须读本帧的最新光源；放在 env.update 之前会滞后一帧，
+  // 低帧率/无头软渲染下会整整卡住一拍（日落仍是白天的太阳）
+  updateWaters(t);
+  // HDRI 是静态白昼天空，夜间必须压低 IBL 强度，否则会破坏昼夜循环
+  if (pbrState.env) scene.environmentIntensity = 0.10 + (1 - env.night) * 0.48;
   renderer.render(scene, camera);
 }
 

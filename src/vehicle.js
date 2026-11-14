@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { instance } from './assets.js';
 import { groundHeight } from './terrain.js';
 import { colliders } from './flora.js';
-import { dist2, clamp } from './util.js';
+import { dist2, clamp, pushOutCircles } from './util.js';
 import { sfx, engineStart, engineUpdate, engineStop, ignitionStart } from './audio.js';
 
 const SPEC = {
@@ -90,15 +90,11 @@ export class Vehicle {
     let nx = this.pos.x + fx * this.speed * dt;
     let nz = this.pos.z + fz * this.speed * dt;
 
-    // 撞树/撞石头：推出并掉速
-    for (const c of colliders) {
-      const d = dist2(nx, nz, c.x, c.z);
-      if (d < c.r + S.radius) {
-        const a = Math.atan2(nx - c.x, nz - c.z);
-        nx = c.x + Math.sin(a) * (c.r + S.radius);
-        nz = c.z + Math.cos(a) * (c.r + S.radius);
-        this.speed *= 0.45;
-      }
+    // 撞树/撞石头：推出并掉速（深者优先，防挤压甩穿）
+    const pushed = pushOutCircles(nx, nz, S.radius, colliders);
+    if (pushed) {
+      nx = pushed[0]; nz = pushed[1];
+      this.speed *= 0.45;
     }
     this.pos.x = nx; this.pos.z = nz;
 

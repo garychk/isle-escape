@@ -41,6 +41,29 @@ export function fbm(x, y, oct = 4, lac = 2, gain = 0.5) {
 export const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 export const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 export const dist2 = (x0, z0, x1, z1) => Math.hypot(x1 - x0, z1 - z0);
+
+// 圆柱碰撞体统一推出：返回推出后的 [x, z]，无压入返回 null。
+// 关键：先收集所有压入的圆柱，按压入深度从深到浅依次推出——
+// 若按数组顺序边推边改，会被 A 推进 B、又被 B 径向甩到另一侧（穿树）。
+export function pushOutCircles(px, pz, pr, list) {
+  const hits = [];
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i], dx = px - c.x, dz = pz - c.z, lim = c.r + pr;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < lim * lim) hits.push([d2, c]);
+  }
+  if (!hits.length) return null;
+  hits.sort((a, b) => a[0] - b[0]);          // d² 越小 = 压得越深
+  let x = px, z = pz;
+  for (let i = 0; i < hits.length; i++) {
+    const c = hits[i][1], dx = x - c.x, dz = z - c.z, lim = c.r + pr;
+    if (dx * dx + dz * dz >= lim * lim) continue;   // 被更深的推出后已脱离
+    const a = Math.atan2(dx, dz);
+    x = c.x + Math.sin(a) * lim;
+    z = c.z + Math.cos(a) * lim;
+  }
+  return [x, z];
+}
 export function segDist2(px, pz, ax, az, bx, bz) { // 点到线段距离
   const dx = bx - ax, dz = bz - az;
   const L2 = dx * dx + dz * dz;

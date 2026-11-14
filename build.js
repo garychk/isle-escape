@@ -34,8 +34,9 @@ if (single) {
         if (!KNOWN.includes(name)) continue;
         assetData[name] = 'data:model/gltf-binary;base64,' +
           fs.readFileSync(path.join(dir, f)).toString('base64');
-      } else if (f.endsWith('.ogg')) {
-        audioData[f] = 'data:audio/ogg;base64,' + fs.readFileSync(path.join(dir, f)).toString('base64');
+      } else if (f.endsWith('.ogg') || f.endsWith('.mp3')) {
+        const mime = f.endsWith('.mp3') ? 'audio/mpeg' : 'audio/ogg';
+        audioData[f] = 'data:' + mime + ';base64,' + fs.readFileSync(path.join(dir, f)).toString('base64');
       }
     }
   }
@@ -58,14 +59,20 @@ if (!single) {
   fs.writeFileSync(path.join(dist, 'index.html'), outMulti);
   fs.writeFileSync(path.join(dist, 'bundle.js'), js);
   const adir = path.join(dist, 'assets');
-  if (!fs.existsSync(adir)) fs.mkdirSync(adir);
   const sdir = path.join(root, 'assets');
   let copied = 0, bytes = 0;
-  for (const f of fs.readdirSync(sdir)) {
-    if (!/\.(glb|ogg|mp3)$/.test(f)) continue;
-    fs.copyFileSync(path.join(sdir, f), path.join(adir, f));
-    copied++; bytes += fs.statSync(path.join(sdir, f)).size;
-  }
+  // 递归拷贝整棵 assets/（含 tex/ 子目录），以后新增素材无需改构建脚本
+  const copyTree = (src, dst) => {
+    if (!fs.existsSync(dst)) fs.mkdirSync(dst, { recursive: true });
+    for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+      const sp = path.join(src, e.name), dp = path.join(dst, e.name);
+      if (e.isDirectory()) { copyTree(sp, dp); continue; }
+      if (/^_/.test(e.name) || /\.(blend|tmp|bak|psd)$/i.test(e.name)) continue;
+      fs.copyFileSync(sp, dp);
+      copied++; bytes += fs.statSync(sp).size;
+    }
+  };
+  copyTree(sdir, adir);
   console.log(`written: ${dist} (index.html + bundle.js + ${copied} 个资产文件, ${(bytes / 1024 / 1024).toFixed(1)} MB)`);
   console.log('启动: node serve.mjs  →  http://localhost:8137/');
 } else {

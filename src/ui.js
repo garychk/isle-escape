@@ -195,7 +195,7 @@ export class UI {
         b.addEventListener('pointerup', () => { g.player.touchFire = false; });
         b.addEventListener('pointercancel', () => { g.player.touchFire = false; });
       } else if (k === 'knife') {
-        b.addEventListener('pointerdown', () => g.player.switchWep(g.player.wep === 'rifle' ? 'knife' : 'rifle'));
+        b.addEventListener('pointerdown', () => g.player.cycleWep());
       } else if (k === 'reload') {
         b.addEventListener('pointerdown', () => g.player.reload());
       } else if (k === 'jump') {
@@ -223,14 +223,18 @@ export class UI {
   }
   updateAmmo(p) {
     const big = $('ammobig');
-    big.firstChild.textContent = p.wep === 'knife' ? '—' : p.mag;
-    $('ammores').textContent = p.wep === 'knife' ? '' : ' / ' + p.reserve;
+    const bare = p.wep !== 'rifle';   // 军刀 / 空手都不显示弹数
+    big.firstChild.textContent = bare ? '—' : p.mag;
+    $('ammores').textContent = bare ? '' : ' / ' + p.reserve;
     big.classList.toggle('empty', p.wep === 'rifle' && p.mag === 0);
     this.updateWep(p);
   }
   updateWep(p) {
-    $('weplab').innerHTML = p.wep === 'rifle' ? '步枪 <em>RIFLE</em>' : '军刀 <em>KNIFE</em>';
+    $('weplab').innerHTML = p.wep === 'rifle' ? '步枪 <em>RIFLE</em>'
+      : p.wep === 'knife' ? '军刀 <em>KNIFE</em>' : '空手 <em>UNARMED</em>';
     if (p.wep === 'knife') $('ammohint').textContent = '近战 · 距离越近越好';
+    else if (p.wep === 'none') $('ammohint').textContent = '空手 · 按 Q 取出武器';
+    else $('ammohint').textContent = '';
   }
   hintEmpty(on) {
     $('ammohint').textContent = '子弹耗尽 · 按 Q 拔刀';

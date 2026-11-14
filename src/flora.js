@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { CFG, TRAIL_W, SPAWN, RAFT, POND, SWAMP, CABIN } from './config.js';
 import { mulberry32, clamp, smoothstep, dist2 } from './util.js';
-import { baseHeight, inCaveCorr, trailDist } from './terrain.js';
+import { baseHeight, terrainY, TERRAIN_SEG, inCaveCorr, trailDist } from './terrain.js';
 import { barkTex, barkNormal, rockTex, grassTex, fernTex, canopyTex, palmFrondTex, bigLeafTex, vineTex, litterTex } from './textures.js';
 import { instance } from './assets.js';
 
@@ -49,6 +49,42 @@ const YAX = new THREE.Vector3(0, 1, 0);
 const ZAX = new THREE.Vector3(0, 0, 1);
 const _v = new THREE.Vector3();
 
+// 脚下地形的最小/最大高度：直接扫半径 r 方形范围内覆盖到的地形网格顶点。
+// 地形表面是分段线性的，最低点必然落在某个网格顶点上（环上采样会漏掉顶点），
+// 所以这样取到的是真正的"最低脚点"，既不会悬空也不会过度下埋。
+const G_STEP = CFG.WORLD / TERRAIN_SEG, G_HALF = CFG.WORLD / 2;
+function gridMinMax(x, z, r) {
+  const i0 = Math.max(0, Math.floor((x - r + G_HALF) / G_STEP));
+  const i1 = Math.min(TERRAIN_SEG, Math.ceil((x + r + G_HALF) / G_STEP));
+  const j0 = Math.max(0, Math.floor((z - r + G_HALF) / G_STEP));
+  const j1 = Math.min(TERRAIN_SEG, Math.ceil((z + r + G_HALF) / G_STEP));
+  let lo = Infinity, hi = -Infinity;
+  for (let j = j0; j <= j1; j++) {
+    const zz = -G_HALF + j * G_STEP;
+    for (let i = i0; i <= i1; i++) {
+      const h = baseHeight(-G_HALF + i * G_STEP, zz);
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+    }
+  }
+  return [lo, hi];
+}
+
+// 脚下高差：用于剔除"骑在沟沿/崖边"的位置
+// （隧道口那条被网格抹平的窄沟，边缘高差能到 30m）
+function footSpan(x, z, r) {
+  const [lo, hi] = gridMinMax(x, z, r);
+  return hi - Math.min(lo, terrainY(x, z));
+}
+
+// 贴地基准：把物体"平底"压到裙边范围内地面最低点之下。
+// 树干、石头的底面是平的，只按中心点高度摆，在坡上必然一侧翘在空中
+// （裙半径 2m、坡度 0.5 就有 1m 空隙）。
+function footBase(x, z, r, sink = 0.15) {
+  const [lo] = gridMinMax(x, z, r);
+  return Math.min(lo, terrainY(x, z)) - sink;
+}
+
 function placeOK(x, z, opts = {}) {
   const h = baseHeight(x, z);
   const r = dist2(x, z, 0, 0);
@@ -64,6 +100,8 @@ function placeOK(x, z, opts = {}) {
   const e = 1.6;
   const slope = Math.hypot(baseHeight(x + e, z) - baseHeight(x - e, z), baseHeight(x, z + e) - baseHeight(x, z - e)) / (2 * e);
   if (slope > 0.85) return false;
+  // 陡坎/沟沿：脚下高差过大的位置不种（否则整棵树会骑在断面之上）
+  if (opts.maxSpan && footSpan(x, z, opts.spanR || 2.4) > opts.maxSpan) return false;
   if (!opts.swampOK) {
     if (dist2(x, z, SWAMP.x, SWAMP.z) < 47) return false;
     if (dist2(x, z, POND.x, POND.z) < 34) return false;
@@ -216,7 +254,9 @@ export function buildFlora(scene, quality = 1) {
   // ================= 1. 雨林巨树（板根 + 主枝 + 高层树冠） =================
   {
     const N = Math.round(340 * quality);
-    const pts = scatter(N);
+    // maxSpan：裙边高差超过 4.6m 就不种（≈坡度 0.88 的均匀坡是极限）。
+    // 这是为了让"骑在隧道口/峡谷断面上的树"整批消失，而不是让它们沉 30m 进山里。
+    const pts = scatter(N, { maxSpan: 4.6, spanR: 2.6 });
     // 树干（根部隆起、截面不规则）
     const trunk = new THREE.InstancedMesh(boleGeo(), barkMat, pts.length);
     // 板根：底部向外张开的高楔
@@ -233,16 +273,19 @@ export function buildFlora(scene, quality = 1) {
     const c = new THREE.Color();
     let bi = 0, ci = 0, br = 0;
     pts.forEach(([x, z], i) => {
-      const y = baseHeight(x, z) - 0.35;
       const s = 0.85 + rng() * 0.75;
       const th = (15 + rng() * 9) * s;
       const lean = (rng() - 0.5) * 0.06;
+      // 根部裙半径：flare(2.2) × 底半径(0.62) × 横向缩放(0.92×s) ≈ 1.26×s
+      // 平底圆盘必须整圈压到地面之下，否则坡地下坡侧会翘出一条整齐的空隙
+      const y = footBase(x, z, 1.26 * s, 0.2);
       UP.position.set(x, y, z);
       UP.scale.set(s * 0.92, th, s * 0.92);
       UP.rotation.set(lean, rng() * 6.28, lean * 0.8);
       UP.updateMatrix();
       trunk.setMatrixAt(i, UP.matrix);
-      colliders.push({ x, z, r: 0.6 * s });
+      // 碰撞半径要盖住板根裙（最远伸到 ~2.3×s），否则人物会整个人嵌进树根里"穿树"
+      colliders.push({ x, z, r: 1.6 * s });
       // 板根
       const bn = 4 + (rng() < 0.5 ? 1 : 0);
       for (let k = 0; k < bn; k++) {
@@ -319,9 +362,9 @@ export function buildFlora(scene, quality = 1) {
     let si = 0, fi = 0;
     const qy = new THREE.Quaternion(), qz = new THREE.Quaternion();
     all.forEach(([x, z]) => {
-      const y = baseHeight(x, z) - 0.2;
       const s = 0.8 + rng() * 0.6;
       const H = (7 + rng() * 5) * s;
+      const y = footBase(x, z, 0.45 * s, 0.1);   // 棕榈底径细，小范围取最低点即可
       const la = rng() * 6.283;
       const bendAmt = (0.6 + rng() * 1.6) * s;
       // 沿曲线堆叠 7 段
@@ -373,7 +416,7 @@ export function buildFlora(scene, quality = 1) {
     const mesh = new THREE.InstancedMesh(g1, mat, pts.length);
     const c = new THREE.Color();
     pts.forEach(([x, z], i) => {
-      const y = baseHeight(x, z);
+      const y = terrainY(x, z);
       const s = 0.7 + rng() * 1.15;
       UP.position.set(x, y - 0.06, z);
       UP.scale.set(s, s * (0.85 + rng() * 0.5), s);
@@ -395,7 +438,7 @@ export function buildFlora(scene, quality = 1) {
     const c = new THREE.Color();
     let i2 = 0;
     pts.forEach(([x, z]) => {
-      const y = baseHeight(x, z);
+      const y = terrainY(x, z);
       const s = (1.1 + rng() * 1.5);
       for (let k = 0; k < 2; k++) {
         UP.position.set(x + (rng() - 0.5) * 0.8, y + s * 0.42, z + (rng() - 0.5) * 0.8);
@@ -420,7 +463,7 @@ export function buildFlora(scene, quality = 1) {
     const mesh = new THREE.InstancedMesh(geo, mat, pts.length);
     const c = new THREE.Color();
     pts.forEach(([x, z], i) => {
-      const y = baseHeight(x, z);
+      const y = terrainY(x, z);
       const s = 0.55 + rng() * 0.75;
       UP.position.set(x, y - 0.05, z);
       UP.scale.set(s, s * (0.85 + rng() * 0.5), s);
@@ -441,7 +484,7 @@ export function buildFlora(scene, quality = 1) {
     const mesh = new THREE.InstancedMesh(geo, mat, pts.length);
     const c = new THREE.Color();
     pts.forEach(([x, z], i) => {
-      const y = baseHeight(x, z);
+      const y = terrainY(x, z);
       const s = 0.30 + rng() * 0.42;
       UP.position.set(x, y - 0.03, z);
       UP.scale.set(s * (0.8 + rng() * 0.5), s * (0.7 + rng() * 0.8), s * (0.8 + rng() * 0.5));
@@ -494,7 +537,7 @@ export function buildFlora(scene, quality = 1) {
     const mesh = new THREE.InstancedMesh(geo, mat, pts.length);
     const c = new THREE.Color();
     pts.forEach(([x, z], i) => {
-      const y = baseHeight(x, z);
+      const y = terrainY(x, z);
       const s = 0.6 + rng() * 1.5;
       UP.position.set(x, y + 0.035, z);
       UP.scale.set(s, 1, s * (0.8 + rng() * 0.5));
@@ -516,22 +559,26 @@ export function buildFlora(scene, quality = 1) {
       new THREE.MeshStandardMaterial({ map: rockT, color: 0xffffff, roughness: 0.95 }), pts.length);
     const c = new THREE.Color();
     pts.forEach(([x, z], i) => {
-      const y = baseHeight(x, z);
       const s = 0.5 + rng() * 2.2;
+      // GLB 石块的原点已烘到"底部中心"，底面是平的：
+      // ① 位置按裙边最低点落（坡上不会一侧翘起）② 翻滚角收紧到 ±0.3rad，
+      // 原来的 ±3rad 会把平底直接翻到朝天，石头就半沉或悬在半空。
       if (extGeo) {
-        // 底部原点：贴地并稍微下埋，随机翻滚姿态
-        UP.position.set(x, y - s * 0.08, z);
+        const y = footBase(x, z, s * 0.8, 0.15 * s);
+        UP.position.set(x, y, z);
         UP.scale.set(s, s * (0.8 + rng() * 0.35), s * (0.85 + rng() * 0.3));
+        UP.rotation.set((rng() - 0.5) * 0.6, rng() * 6.28, (rng() - 0.5) * 0.6);
       } else {
+        const y = terrainY(x, z);
         UP.position.set(x, y + s * 0.18, z);
         UP.scale.set(s, s * (0.6 + rng() * 0.5), s);
+        UP.rotation.set(rng() * 3, rng() * 6.28, rng() * 3);
       }
-      UP.rotation.set(rng() * 3, rng() * 6.28, rng() * 3);
       UP.updateMatrix();
       mesh.setMatrixAt(i, UP.matrix);
       c.setHSL(0.08 + rng() * 0.04, 0.06 + rng() * 0.05, 0.40 + rng() * 0.18);
       mesh.setColorAt(i, c);
-      if (s > 1.0) colliders.push({ x, z, r: s * 0.82 });
+      colliders.push({ x, z, r: s * 0.82 });   // 小块石头也挡人（1m 宽的石头能穿人很假）
     });
     mesh.castShadow = soft;
     mesh.receiveShadow = true;
@@ -546,14 +593,22 @@ export function buildFlora(scene, quality = 1) {
     geo.rotateZ(-Math.PI / 2);
     const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ map: bark, normalMap: barkN, normalScale: new THREE.Vector2(0.7, 0.7), color: 0x8d7f66, roughness: 1 }), pts.length);
     pts.forEach(([x, z], i) => {
-      const y = baseHeight(x, z) + 0.36;
       const L = 3 + rng() * 4.5;
+      const yaw = rng() * 6.28, tilt = (rng() - 0.5) * 0.08;
+      // 3~7.5m 的长条：两端各取一次地面高度，按低的一端落，坡上才不会一头翘起
+      const hx = Math.cos(yaw) * L * 0.5, hz = -Math.sin(yaw) * L * 0.5;
+      const y = Math.min(terrainY(x + hx, z + hz), terrainY(x - hx, z - hz), terrainY(x, z)) + 0.36;
       UP.position.set(x, y, z);
       UP.scale.set(L, 1, 1);
-      UP.rotation.set(0, rng() * 6.28, (rng() - 0.5) * 0.08);
+      UP.rotation.set(0, yaw, tilt);
       UP.updateMatrix();
       mesh.setMatrixAt(i, UP.matrix);
-      colliders.push({ x, z, r: 0.8 });
+      // 倒木是 3~7.5m 的长条：沿轴摆一串小圆，两端才挡得住（单个圆只盖中间）
+      const la = UP.rotation.y, n = Math.max(2, Math.ceil(L / 1.0));
+      for (let k = 0; k < n; k++) {
+        const t = (n === 1 ? 0 : (k / (n - 1) - 0.5)) * (L - 0.9);
+        colliders.push({ x: x + Math.cos(la) * t, z: z - Math.sin(la) * t, r: 0.62 });
+      }
     });
     mesh.castShadow = soft;
     mesh.receiveShadow = true;
@@ -567,14 +622,14 @@ export function buildFlora(scene, quality = 1) {
       const pts = scatter(Math.round(34 * quality), { nearTrail: true });
       const mesh = new THREE.InstancedMesh(sa.geo, sa.mat, pts.length);
       pts.forEach(([x, z], i) => {
-        const y = baseHeight(x, z);
         const s = 0.65 + rng() * 1.05;
-        UP.position.set(x, y - 0.03 * s, z);   // 根须稍微下埋一点，贴合地形
+        const y = footBase(x, z, 0.9 * s, 0.05);   // 根须按裙边最低点落位，坡上不会半边悬空
+        UP.position.set(x, y, z);
         UP.scale.set(s, s * (0.9 + rng() * 0.3), s);
         UP.rotation.set((rng() - 0.5) * 0.1, rng() * 6.28, (rng() - 0.5) * 0.1);
         UP.updateMatrix();
         mesh.setMatrixAt(i, UP.matrix);
-        if (s > 0.85) colliders.push({ x, z, r: s * 0.85 });
+        colliders.push({ x, z, r: s * 0.85 });   // 小断桩也挡人（最宽 2.2×0.65≈1.4m，穿过去很假）
       });
       mesh.castShadow = soft;
       mesh.receiveShadow = true;
@@ -591,7 +646,7 @@ function buildSwamp(group, bark, soft) {
   const pts = scatter(Math.round(52), { swampOK: true, zone: (x, z) => { const d = dist2(x, z, SWAMP.x, SWAMP.z); return d < 46 && d > 16; } });
   const deadMat = new THREE.MeshStandardMaterial({ map: bark, color: 0x8c8474, roughness: 1 });
   for (const [x, z] of pts) {
-    const y = baseHeight(x, z) - 0.3;
+    const y = footBase(x, z, 0.45, 0.12);   // 枯树干也是平底，按裙边最低点埋
     const g0 = new THREE.Group();
     const h = 4.5 + rng() * 3.5;
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.36, h, 6), deadMat);
@@ -620,7 +675,7 @@ function buildSwamp(group, bark, soft) {
     const a = rng() * 6.283, rr = 18 + rng() * 30;
     const x = SWAMP.x + Math.cos(a) * rr, z = SWAMP.z + Math.sin(a) * rr;
     if (Math.abs(x - 86) < 3) continue;
-    const y = baseHeight(x, z);
+    const y = terrainY(x, z);
     if (y > CFG.SWAMP_Y + 0.7) continue;
     const s = 0.7 + rng() * 0.9;
     UP.position.set(x, y, z); UP.scale.set(s, s * (0.8 + rng() * 0.9), s);
@@ -666,15 +721,20 @@ function buildBeachProps(parent, bark, rockT, grassT) {
   for (let i = 0; i < 2600 && (di < 70 || pi < 90 || gi < 320); i++) {
     const a = rng() * 6.283, rr = 188 + rng() * 40;
     const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
-    const h = baseHeight(x, z);
+    const h = terrainY(x, z);   // 沙滩杂物同样按渲染网格落位
     if (h < 1.0 || h > 3.6) continue;
     if (trailDist(x, z) < 4) continue;
     if (dist2(x, z, SPAWN.x, SPAWN.z) < 10 || dist2(x, z, RAFT.x, RAFT.z) < 12) continue;
     const pick = rng();
     if (pick < 0.22 && di < 70) {
-      UP.position.set(x, h + 0.14, z);
-      UP.scale.set(1.4 + rng() * 3.4, 1, 1);
-      UP.rotation.set(0, rng() * 6.28, (rng() - 0.5) * 0.12);
+      const L = 1.4 + rng() * 3.4;
+      const yaw = rng() * 6.28, tilt = (rng() - 0.5) * 0.12;
+      // 浮木是躺倒的长条：两端各取一次地面高度，按低的一端落位，免得起翘
+      const hx = Math.cos(yaw) * L * 0.5, hz = -Math.sin(yaw) * L * 0.5;
+      const y0 = Math.min(terrainY(x + hx, z + hz), terrainY(x - hx, z - hz), terrainY(x, z));
+      UP.position.set(x, y0 + 0.16, z);
+      UP.scale.set(L, 1, 1);
+      UP.rotation.set(0, yaw, tilt);
       UP.updateMatrix();
       drift.setMatrixAt(di++, UP.matrix);
     } else if (pick < 0.5 && pi < 90) {

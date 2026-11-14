@@ -4,6 +4,9 @@ import { mulberry32 } from './util.js';
 
 const rnd = mulberry32(4242);
 const cache = {};
+// 真实素材覆盖（由 pbr.js 在启动阶段注入）：缺文件时下面的函数自动回退程序化贴图
+const overrides = {};
+export function setTextureOverride(key, t) { if (t) overrides[key] = t; }
 
 function bleedAlpha(cv, rgb) {
   const g = cv.getContext('2d');
@@ -403,6 +406,7 @@ export function vineTex() {
 
 // ---------- 地面落叶层（贴地小片） ----------
 export function litterTex() {
+  if (overrides.litter) return overrides.litter;
   return tex('litter', 256, 256, (g, w, h) => {
     g.clearRect(0, 0, w, h);
     for (let i = 0; i < 90; i++) {
@@ -511,6 +515,7 @@ export function sailTex() {
 
 // ---------- 草叶簇（细密，带枯黄混色） ----------
 export function grassTex() {
+  if (overrides.grass) return overrides.grass;
   return tex('grass', 256, 256, (g, w, h) => {
     g.clearRect(0, 0, w, h);
     for (let i = 0; i < 120; i++) {
@@ -533,6 +538,7 @@ export function grassTex() {
 
 // ---------- 蕨叶（羽状，更密） ----------
 export function fernTex() {
+  if (overrides.fern) return overrides.fern;
   return tex('fern', 256, 256, (g, w, h) => {
     g.clearRect(0, 0, w, h);
     for (let f = 0; f < 11; f++) {

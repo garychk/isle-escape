@@ -51,6 +51,9 @@ def parse_args():
     ap.add_argument('--tex-max', type=int, default=1024, help='贴图长边上限，0=不缩放（默认 1024）')
     ap.add_argument('--img-format', default='WEBP', choices=['AUTO', 'JPEG', 'WEBP'],
                     help='导出的贴图格式，WEBP 体积最小且保留 alpha（默认）')
+    ap.add_argument('--only', default='',
+                    help='只合并这些文件名主干（逗号分隔，不含扩展名）。'
+                         '目录里混了别的角色（狼/鳄鱼等）时必须用它，否则会把它们的动作也挂到人物上')
     return ap.parse_args(argv)
 
 
@@ -383,6 +386,15 @@ def main():
     files = sorted(
         [os.path.join(src, f) for f in os.listdir(src) if f.lower().endswith('.fbx')]
     )
+    if a.only:
+        want = [s.strip().lower() for s in a.only.split(',') if s.strip()]
+        picked = [f for f in files if os.path.splitext(os.path.basename(f))[0].lower() in want]
+        missing = [w for w in want if not any(
+            os.path.splitext(os.path.basename(f))[0].lower() == w for f in picked)]
+        if missing:
+            raise SystemExit('白名单里的文件不存在: ' + ', '.join(missing))
+        files = picked
+        log('白名单筛选：%d 个文件' % len(files))
     if not files:
         raise SystemExit('目录里没有 FBX: ' + src)
 

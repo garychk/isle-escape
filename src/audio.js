@@ -132,6 +132,61 @@ export function setCaveAmbience(inCave) {
   ambNodes.insectGain.gain.value = inCave ? 0 : ambNodes.insectGain.gain.value;
 }
 
+// —— 水流环境音：assets/sfx_water_flow.mp3 ——
+// 真录音循环（首尾等功率交叉淡化，接缝处不"咔"），音量与低通都由「离水面的距离」驱动：
+// 站在水里最响、最亮（能听到细碎水花），离岸十几米只剩低沉的远处水声，再远静音。
+let waterAmb = null, waterTarget = 0;
+
+// 首尾交叉淡化：把尾巴 fade 秒叠到开头，循环到头接回起点时波形连续
+function loopBuffer(c, buf, fadeSec = 1.5) {
+  const fade = Math.min(Math.floor(fadeSec * c.sampleRate), Math.floor(buf.length / 4));
+  const len = buf.length - fade;
+  const out = c.createBuffer(buf.numberOfChannels, len, buf.sampleRate);
+  for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+    const src = buf.getChannelData(ch), dst = out.getChannelData(ch);
+    dst.set(src.subarray(0, len));
+    for (let i = 0; i < fade; i++) {
+      const w = (i / fade) * Math.PI / 2;      // 0→π/2 等功率
+      dst[i] = src[i] * Math.sin(w) + src[len + i] * Math.cos(w);
+    }
+  }
+  return out;
+}
+
+function startWaterAmbience() {
+  const c = ensure(); if (!c || waterAmb) return;
+  const buf = sfxBuffers.get('waterFlow');
+  if (!buf) return;                            // 还没解码完，下次 setWaterNear 再试
+  const src = c.createBufferSource(); src.buffer = loopBuffer(c, buf); src.loop = true;
+  const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 80;
+  const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900; lp.Q.value = 0.4;
+  const g = c.createGain(); g.gain.value = 0;
+  src.connect(hp).connect(lp).connect(g).connect(master);
+  src.start();
+  waterAmb = { src, hp, lp, g, dur: +src.buffer.duration.toFixed(2) };
+  console.log('[audio] 水流环境音已启动（' + waterAmb.dur + 's 无缝循环）');
+}
+
+// level: 0 = 远离水面，1 = 身处水中
+export function setWaterNear(level) {
+  const c = ensure(); if (!c || !enabled) return;
+  waterTarget = Math.max(0, Math.min(1, level || 0));
+  if (!waterAmb) { startWaterAmbience(); if (!waterAmb) return; }
+  const t = c.currentTime, lv = waterTarget;
+  waterAmb.g.gain.setTargetAtTime(lv * 0.42, t, 0.35);
+  // 远处空气吸收高频：0→900Hz（闷），1→12kHz（清亮的水花声）
+  waterAmb.lp.frequency.setTargetAtTime(900 * Math.pow(13.5, lv), t, 0.5);
+}
+export function waterAmbState() {
+  if (!waterAmb) return { on: false, loaded: sfxBuffers.has('waterFlow') };
+  return {
+    on: true, target: +waterTarget.toFixed(3),
+    gain: +waterAmb.g.gain.value.toFixed(3),
+    cutoff: Math.round(waterAmb.lp.frequency.value),
+    dur: waterAmb.dur, loaded: sfxBuffers.has('waterFlow'),
+  };
+}
+
 // —— 雨声：过滤噪声，随雨量增减 ——
 let rainNode = null;
 export function setRain(level) {
@@ -221,6 +276,7 @@ export function startBGM() {
   loadSfxFile('sfx_engine_loop.ogg', 'engine');
   loadSfxFile('sfx_engine_idle.ogg', 'engineIdle');
   loadSfxFile('sfx_growl.ogg', 'growl');
+  loadSfxFile('sfx_water_flow.mp3', 'waterFlow');   // 水流环境音（循环，见 setWaterNear）
   const out = c.createGain(); out.gain.value = 0; out.connect(master);
   out.gain.linearRampToValueAtTime(0.55, c.currentTime + 3.0);
   const gExp = c.createGain(); gExp.gain.value = 1; gExp.connect(out);

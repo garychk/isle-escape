@@ -16,6 +16,7 @@ const MIME = {
   '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.glb': 'model/gltf-binary', '.ogg': 'audio/ogg', '.mp3': 'audio/mpeg',
   '.fbx': 'application/octet-stream', '.ico': 'image/x-icon', '.svg': 'image/svg+xml', '.wasm': 'application/wasm',
+  '.hdr': 'image/vnd.radiance', '.exr': 'image/aces', '.ktx2': 'image/ktx2',
 };
 
 const server = createServer(async (req, res) => {
