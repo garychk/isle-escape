@@ -7,6 +7,10 @@ import { buildRifle, buildKnife } from './weapons.js';
 // 动画别名表：GLB 里的 clip 名只要命中正则就能挂上对应动作
 // 顺序有讲究：带方向后缀的必须排在 walk / run 前面，否则 walk_back 会被 /walk/ 抢走
 const ALIAS = [
+  // 持刀专有的待机/移动姿势（Idle.fbx / Jab Cross.fbx）：
+  // knife_idle 带 idle、knife_walk 带 walk，都必须排在通用 idle / walk 前面。
+  ['knifeIdle', /knife.*idle|knife.*hold/i],
+  ['knifeWalk', /knife.*walk|knife.*move/i],
   // 空手专属的站立/停步/左右转：必须排在最前面。
   // stop_walk 带 "walk"、idle_unarmed 带 "idle"，否则会被通用的 /walk/ /idle/ 抢走，
   // 把持械的 walk / idle 覆盖成空手动作。
@@ -36,7 +40,6 @@ const ALIAS = [
   ['reload', /reload/i],
   ['drive', /drive|riding|sit/i],
   ['die', /death|dying|^die$/i],
-  ['knifeIdle', /knife.*idle|knife.*hold/i],   // 必须排在 idle 前，否则会被通用 idle 正则吞掉
   ['idle', /idle|stand|breath/i],
 ];
 
@@ -63,11 +66,24 @@ const NATIVE_SPEED = {
 const LOCO = new Set(['walk', 'run', 'walk_back', 'run_back', 'strafe_l', 'strafe_r',
   'crouchWalk', 'crouchIdle', 'aimWalk', 'walk_unarmed', 'run_unarmed']);
 
+// 军刀待机姿态：刀尖向前上方 45°，刀身（绕自身轴）微微向左倾
+const KNIFE_PITCH = Math.PI / 4;   // 45°
+const KNIFE_ROLL = 0.20;           // 约 11.5°，正角度 = 刀背上缘向人物左侧倾
+// 挥砍时刀身放平、倾角收小；动作速率单独由 trigger 的 rate 控制
+const KNIFE_SWING_PITCH = 0.12;
+const KNIFE_SWING_ROLL = 0.08;
+export const SLASH_RATE = 1.65;    // 裁后的 1.33s 挥刀剪辑 → 0.81s
+
 // _poseWeapon / IK 用的临时对象（避免每帧分配）
-const _vA = new THREE.Vector3(), _vB = new THREE.Vector3(), _vC = new THREE.Vector3(), _vD = new THREE.Vector3();
-const _qA = new THREE.Quaternion(), _qB = new THREE.Quaternion(), _qC = new THREE.Quaternion();
+const _vA = new THREE.Vector3(), _vB = new THREE.Vector3(), _vC = new THREE.Vector3(), _vD = new THREE.Vector3(),
+  _vE = new THREE.Vector3(), _vF = new THREE.Vector3(), _vG = new THREE.Vector3(), _vH = new THREE.Vector3(),
+  _vI = new THREE.Vector3(), _vJ = new THREE.Vector3();
+const _qA = new THREE.Quaternion(), _qB = new THREE.Quaternion(), _qC = new THREE.Quaternion(),
+  _qD = new THREE.Quaternion(), _qE = new THREE.Quaternion(), _qF = new THREE.Quaternion();
 const _mA = new THREE.Matrix4();
-const _AXIS_Z = new THREE.Vector3(0, 0, 1);
+const _AXIS_Z = new THREE.Vector3(0, 0, 1), _AXIS_X = new THREE.Vector3(1, 0, 0);
+// 在"已校正到 -Z 长轴"的父级系里绕 Z 翻 180°：只翻刀身横截面，不动刀尖方向
+const _qFlipKnife = new THREE.Quaternion().setFromAxisAngle(_AXIS_Z, Math.PI);
 // 两骨 IK 专用临时量
 const _ikS = new THREE.Vector3(), _ikE = new THREE.Vector3(), _ikH = new THREE.Vector3(),
   _ikE2 = new THREE.Vector3(), _ikH2 = new THREE.Vector3(),
@@ -77,6 +93,33 @@ const _ikS = new THREE.Vector3(), _ikE = new THREE.Vector3(), _ikH = new THREE.V
   _ikHT = new THREE.Vector3(),                                // 肘部 hint
   _ikQW = new THREE.Quaternion(),                             // 枪朝向（世界）
   _ikQ1 = new THREE.Quaternion(), _ikQ2 = new THREE.Quaternion(), _ikQP = new THREE.Quaternion();
+
+/**
+ * 校正军刀资产的长轴。Blender 的 glTF 导出会额外做一次 Z-up→Y-up 转换，
+ * 与 build_knife.py 里的 Rx(90°) 叠加后，实测导出的 knife.glb 长轴是 -Y（刀尖朝下），
+ * 而整套武器摆放代码都按"刀尖 -Z"约定写。这里按包围盒自动纠正，
+ * 以后若重新导出成 -Z 也不会被二次旋转。
+ */
+function orientKnifeAxis(obj) {
+  const wrap = new THREE.Group();
+  wrap.name = 'knifeAxisFix';
+  wrap.add(obj);
+  wrap.updateWorldMatrix(true, true);
+  const bb = new THREE.Box3().setFromObject(obj);
+  const size = bb.getSize(new THREE.Vector3());
+  if (size.y > size.z * 1.5 && size.y > size.x * 1.5) {
+    // -Y（刀尖）→ -Z：绕 X 轴 +90°；(x, y, z) → (x, -z, y)
+    obj.rotation.x = Math.PI / 2;
+    // 在"已校正过"的父级系里绕 Z 翻 180°：实测该资产收尖的开刃侧在局部 +Y，
+    // 不翻会变成"刀刃朝天、刀背朝下"。必须用 premultiply（父级系），
+    // 若用 rotateZ/后乘，会连刀尖 -Z 一起翻到 +Z，刀又斜插回手腕。
+    obj.quaternion.premultiply(_qFlipKnife);
+  } else if (size.z > size.y * 1.5 && Math.abs(bb.max.z) > Math.abs(bb.min.z) * 2) {
+    // 长轴是 Z 但刀尖朝 +Z（反了）
+    obj.rotation.y = Math.PI;
+  }
+  return wrap;
+}
 
 export class Character {
   constructor(scene) {
@@ -141,10 +184,10 @@ export class Character {
       ri ? new THREE.Vector3(0, 0.11, -0.38)   // 护木下缘
          : new THREE.Vector3(0, -0.03, -0.20));
 
-    // 军刀
+    // 军刀：外部 GLB 的刀尖实测朝 -Y，先自动纠正到 -Z 约定再挂到武器根节点
     const ki = instance('knife');
-    const knife = ki ? ki.wrap : buildKnife({ hands: false, scale: 0.95 });
-    this.weapons.knife = mk('knife', knife, ki ? 0 : 0.05,
+    const knife = orientKnifeAxis(ki ? ki.wrap : buildKnife({ hands: false, scale: 0.95 }));
+    this.weapons.knife = mk('knife', knife, 0,
       ki ? null : new THREE.Vector3(0, 0, 0.05));
 
     this.weaponRoot.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
@@ -180,6 +223,14 @@ export class Character {
       clips = clips.slice();
       clips[swIdx] = THREE.AnimationUtils.subclip(clips[swIdx], 'stop_walk', 0, 30, 30);
     }
+    // Slash.fbx 是 2.07s 的完整起手→出刀→收势：实测 0~0.5s 几乎不动、
+    // 1.6s 之后只是缓慢归位，原速播就像慢动作。裁到 0.30~1.63s 再轻加速，
+    // 出刀段仍有 0.33s 的可见行程，不会变成一两帧的糊影。
+    const slIdx = clips.findIndex(c => c.name.toLowerCase() === 'slash');
+    if (slIdx >= 0 && clips[slIdx].duration > 1.8) {
+      clips = clips.slice();
+      clips[slIdx] = THREE.AnimationUtils.subclip(clips[slIdx], 'slash', 9, 49, 30);
+    }
 
     this.mixer = new THREE.AnimationMixer(this.model);
     // 先按关键帧名精确对齐（run_back 不会被误当成 run），再走关键字兜底
@@ -207,6 +258,20 @@ export class Character {
     this.hand = findBone(this.model, /(mixamorig)?(right|r)[_ ]?hand|hand[_ ]?r\b|wrist[_ ]?r/i)
       || findBone(this.model, /hand/i);
     this.handName = this.hand ? this.hand.name : '(未找到手骨)';
+    // 持刀握拳：Mixamo 手指骨都沿局部 +Y 生长、绕局部 +X 弯曲（朝掌心）。
+    // knife_idle 素材本身是半张开的手，需要额外包握量才能把刀柄攥住。
+    this.fingersR = [];
+    this.knucklesR = [];
+    const FINGER_CURL = [0, 0.24, 0.38, 0.30];  // 第 1/2/3 节各自的额外弯曲（弧度）
+    this.model.traverse((o) => {
+      if (!o.isBone) return;
+      const m = /RightHand(Index|Middle|Ring|Pinky|Thumb)([1-3])$/i.exec(o.name);
+      if (!m) return;
+      const seg = +m[2];
+      const curl = /Thumb/i.test(m[1]) ? [0, 0.10, 0.16, 0.12][seg] : FINGER_CURL[seg];
+      if (curl > 0) this.fingersR.push({ bone: o, curl });
+      if (seg === 1 && !/Thumb/i.test(m[1])) this.knucklesR.push(o);
+    });
     // 双臂 IK 链（肩 UpperArm → 前臂 ForeArm → 手 Hand）：持枪时手直接解算到枪上
     this.armsIK = [];
     for (const side of ['Right', 'Left']) {
@@ -304,6 +369,8 @@ export class Character {
   setWeapon(kind) {
     this.wep = kind;
     if (this.weapons) for (const k of Object.keys(this.weapons)) this.weapons[k].visible = (k === kind);
+    // 换到军刀时重新标定"手骨静止姿态"，避免沿用上一次拔刀/跑动时的手腕角度
+    if (kind === 'knife') this._knifeQ0 = null;
     // 6 个空手动画的 Hips 根位移已在资产层统一到持械 idle 的基准
     // （tools/freeze_unarmed_roots.js），切武器时不需要任何运行时位置补偿。
   }
@@ -340,8 +407,8 @@ export class Character {
     return true;
   }
 
-  /** 触发一次性动作（开火 / 挥刀 / 翻滚） */
-  trigger(key, fade = 0.08) {
+  /** 触发一次性动作（开火 / 挥刀 / 翻滚）；rate>1 可加快动作而不改帧数 */
+  trigger(key, fade = 0.08, rate = 1) {
     if (this.mode !== 'glb') return false;
     if (!this.actions[key]) return false;
     const a = this.actions[key];
@@ -349,12 +416,12 @@ export class Character {
     a.setLoop(THREE.LoopOnce, 1);
     a.clampWhenFinished = true;
     this._savePhase();               // 开枪/挥刀结束后回走路，相位能接上
-    a.timeScale = 1;
+    a.timeScale = rate;
     a.setEffectiveWeight(1).fadeIn(fade).play();
     if (this.current && this.current !== a) this.current.fadeOut(fade);
     this.current = a;
     this.oneShot = a;
-    this.oneShotT = a.getClip().duration * 0.9;
+    this.oneShotT = a.getClip().duration * 0.9 / rate;
     return true;
   }
 
@@ -411,6 +478,9 @@ export class Character {
         }
       }
       this.mixer.update(dt);
+      // 持刀时把四指/拇指再往里扣一扣，让刀柄真正被攥在掌心里。
+      // 必须放在 mixer.update 之后：动画每帧会重写骨骼，提前改会被覆盖。
+      this._gripFingers();
       // 有 drive 动画就交给动画，没有才用程序化坐姿兜底
       if (st.driving && !this.actions.drive) this._sitPose();
     } else this._posePlaceholder(dt, st);
@@ -521,14 +591,16 @@ export class Character {
     const g = this.weapons && this.weapons[this.wep];
     if (!g) return;
 
-    // —— 位置锚：刀=右手骨（原点=握把，直接握在手里）；
-    //    枪=右肩骨 + 固定偏移 = 肩窝点（枪托落点）；无骨骼退化用默认值 ——
     const isKnife = this.wep === 'knife' && !!this.hand;
+    const swinging = st.slashT > 0 || (this.current && this.current.__name === 'slash');
+
+    // —— 位置锚 ——
+    //    刀 = 掌心里（腕骨→指根 55%，再往掌面偏一点）；
+    //    枪 = 右肩骨 + 固定偏移 = 肩窝点（枪托落点）；无骨骼退化用默认值
     if (isKnife) {
-      this.hand.getWorldPosition(this.v3);
+      // 以前直接用腕骨当握点，刀等于斜插在手腕上，看上去就是硬"贴"在手上
+      this._knifeGripPoint(this.v3);
       this.root.worldToLocal(this.v3);
-      this.v3.y -= 0.03;   // 握把略低于腕骨
-      this.v3.z -= 0.02;   // 略靠掌心前
     } else {
       const anchorBone = this.shoulderR || this.hand;
       if (anchorBone) anchorBone.getWorldPosition(this.v3);
@@ -544,19 +616,54 @@ export class Character {
       this.v3.x += sp * 0.05;
     }
 
-    // —— 朝向：期望的"枪口方向"（root 局部：-Z 前，pitch 控制俯仰）——
+    // —— 朝向：期望的"刀尖/枪口方向"（root 局部：-Z 前，pitch 控制俯仰）——
     const t = performance.now() / 1000;
     const sway = Math.sin(t * (st.sprint ? 9 : 5)) * (st.moving ? 0.05 : 0.015);
-    let pitch, roll = 0;
-    if (this.wep === 'knife') {
-      pitch = st.slashT > 0 ? 0.1 : 0.5;      // 刀：斜持，挥砍时抬平
-      roll = 0.55;
+    let pitch;
+    if (isKnife) {
+      pitch = swinging ? KNIFE_SWING_PITCH : KNIFE_PITCH;   // 待机 45° 向前上，挥砍时放平
     } else {
       // 枪：瞄准时跟随镜头俯仰（视觉减半，避免大仰角时机匣横穿头部；
       // 弹道不受影响——曳光弹始终从枪口连向准星），腰射时枪口下压 ~24°（低姿持枪）
       pitch = (st.aiming ? (st.pitch || 0) * 0.5 : -0.42) + sway * 0.4;
     }
-    // 目标世界朝向：局部 -Z→fwd、+Y→上；转成 root 局部四元数
+
+    if (isKnife) {
+      // 在 root 局部系里构造姿态：刀尖 = (0, sin p, -cos p)，刀背绕自身轴微微左倾
+      const fwd = _vA.set(0, Math.sin(pitch), -Math.cos(pitch));
+      const zAxis = _vB.copy(fwd).negate();
+      const yAxis = _vC.set(0, 1, 0).addScaledVector(zAxis, -zAxis.y).normalize();
+      const xAxis = _vD.crossVectors(yAxis, zAxis);
+      _mA.makeBasis(xAxis, yAxis, zAxis);
+      _qB.setFromRotationMatrix(_mA);
+      _qB.multiply(_qC.setFromAxisAngle(_AXIS_Z, swinging ? KNIFE_SWING_ROLL : KNIFE_ROLL));
+
+      // 待机：刀稳稳握在手里，就是 45° 向前上 + 微左倾（不跟着手腕的呼吸摆动乱晃）。
+      // 挥砍：取"手骨相对 root 的旋转增量"叠加到持刀姿态，整条手臂的摆动直接传给刀，
+      //       否则刀会像一块铁板钉在角色身上。起手瞬间重新标定基准，避免姿态跳变。
+      this.root.getWorldQuaternion(_qA);
+      this.hand.getWorldQuaternion(_qD);
+      _qF.copy(_qA).invert();
+      _qD.premultiply(_qF);                 // 去掉 root 自身 yaw，只留手臂动画
+      if (!this._knifeQ0) this._knifeQ0 = _qD.clone();
+      if (swinging) {
+        if (!this._knifeSwinging) this._knifeQ0.copy(_qD);
+        _qE.copy(this._knifeQ0).invert();
+        _qF.copy(_qD).multiply(_qE);        // 手臂摆动增量
+        _qE.copy(_qF).multiply(_qB);        // root 局部目标姿态
+      } else {
+        this._knifeQ0.slerp(_qD, Math.min(1, dt * 6));
+        _qE.copy(_qB);
+      }
+      this._knifeSwinging = swinging;
+      w.quaternion.slerp(_qE, Math.min(1, dt * (swinging ? 35 : 10)));
+      // 握点必须逐帧精确跟手：挥刀时手速很快，lerp 会甩出十几厘米的滞后，
+      // 看起来就像刀从手里滑出去。手骨本身已经是平滑的动画，无需再插值。
+      w.position.copy(this.v3);
+      return;
+    }
+
+    // —— 枪（原逻辑保持不变）：目标世界朝向 → root 局部四元数 ——
     const rootQ = this.root.getWorldQuaternion(_qA);
     const fwd = _vA.set(0, Math.sin(pitch), -Math.cos(pitch)).applyQuaternion(_qA).normalize();
     const zAxis = _vB.copy(fwd).negate();
@@ -564,20 +671,37 @@ export class Character {
     const xAxis = _vD.crossVectors(yAxis, zAxis);
     _mA.makeBasis(xAxis, yAxis, zAxis);
     _qB.setFromRotationMatrix(_mA);
-    if (roll) _qB.multiply(_qC.setFromAxisAngle(_AXIS_Z, roll));
     _qA.invert().multiply(_qB);              // rootQ⁻¹ × 目标世界朝向 = root 局部朝向
     w.quaternion.slerp(_qA, Math.min(1, dt * 14));
 
-    // 枪托底落肩窝：枪原点 = 肩窝 + 枪口方向 × 托底距离（沿枪轴向后退到肩）；
-    // 刀原点=握把，直接落在手骨位置，不需要轴向补偿
-    if (isKnife) {
-      w.position.lerp(this.v3, Math.min(1, dt * 20));
-      return;
-    }
+    // 枪托底落肩窝：枪原点 = 肩窝 + 枪口方向 × 托底距离（沿枪轴向后退到肩）
     const buttZ = g.userData.buttZ || 0.42;
     const fwdNow = _vA.set(0, 0, -1).applyQuaternion(w.quaternion);
     const target = _vB.copy(this.v3).addScaledVector(fwdNow, buttZ);
     w.position.lerp(target, Math.min(1, dt * 20));
+  }
+
+  /** 掌心握点（世界坐标）：腕骨→四指指根 55%，再沿掌面向拇指侧偏 8mm */
+  _knifeGripPoint(out) {
+    const hand = this.hand;
+    if (!hand) return out.set(0.18, 1.25, -0.1).applyMatrix4(this.root.matrixWorld);
+    const wrist = hand.getWorldPosition(_vE);
+    if (!this.knucklesR || this.knucklesR.length < 2) return out.copy(wrist);
+    const knuckle = _vF.set(0, 0, 0);
+    for (const b of this.knucklesR) knuckle.add(b.getWorldPosition(_vH));
+    knuckle.divideScalar(this.knucklesR.length);
+    // 食指根 - 小指根 = 掌宽方向；与"腕→指根"叉乘得到掌面法向（拇指侧）
+    const span = _vG.subVectors(this.knucklesR[0].getWorldPosition(_vH),
+      this.knucklesR[this.knucklesR.length - 1].getWorldPosition(_vI)).normalize();
+    const fingerDir = _vJ.subVectors(knuckle, wrist).normalize();
+    span.cross(fingerDir).normalize();
+    return out.copy(wrist).lerp(knuckle, 0.55).addScaledVector(span, 0.008);
+  }
+
+  /** 持刀时把手指再往掌心扣一些（mixer.update 之后调用，否则会被动画覆盖） */
+  _gripFingers() {
+    if (this.wep !== 'knife' || !this.fingersR || !this.fingersR.length) return;
+    for (const f of this.fingersR) f.bone.rotateX(f.curl);
   }
 
   _pickState(st, dt) {
@@ -641,6 +765,12 @@ export class Character {
     }
 
     if (st.moving) {
+      // 持刀移动用专属姿势（Jab Cross.fbx）；冲刺仍走原来的 run，避免腿部节奏对不上。
+      // 只影响 wep==='knife'，持枪/空手的移动分支完全不变。
+      if (this.wep === 'knife' && !st.sprint && has('knifeWalk')) {
+        this.play('knifeWalk', 0.16, false, true);
+        return;
+      }
       // 空手（wep='none'）：换 Standard Walk / Running 的放松步态；
       // 拿着武器时仍用持械走跑，避免枪在手里却像散步一样甩臂
       const un = !this.wep || this.wep === 'none';

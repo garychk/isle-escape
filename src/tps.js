@@ -1,6 +1,6 @@
 // 第三人称：弹簧臂相机 + 角色总装 + 载具驾驶
 import * as THREE from 'three';
-import { Character } from './character.js';
+import { Character, SLASH_RATE } from './character.js';
 import { Vehicle } from './vehicle.js';
 import { groundHeight } from './terrain.js';
 import { colliders } from './flora.js';
@@ -46,7 +46,9 @@ export class TPS {
   /** 玩家开火/挥刀时由 player 调用，驱动角色一次性动作 */
   onAction(kind) {
     if (kind === 'rifle') { this.char.trigger('shoot', 0.06); this.shootT = 0.12; }
-    else { this.char.trigger('slash', 0.06); this.slashT = 0.45; }
+    // 挥刀素材裁掉拖沓的头尾后约 1.33s，1.65 倍速 ≈ 0.81s。
+    // 起手姿势与持刀待机差约 40°，淡入给到 0.13s，避免加速后变成"硬切"。
+    else { this.char.trigger('slash', 0.13, SLASH_RATE); this.slashT = 0.45; }
   }
 
   startRoll() { this.rollT = 0.55; }

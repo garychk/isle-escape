@@ -44,7 +44,17 @@ const base = parseGLB(fs.readFileSync(arg('base')));
 const add = parseGLB(fs.readFileSync(arg('add')));
 const only = new Set(arg('only', '').split(',').map(s => s.trim()).filter(Boolean));
 const out = arg('out');
+const replace = process.argv.includes('--replace');
 if (!only.size || !out) throw new Error('需要 --only 与 --out');
+
+// --replace：同名 clip 视为「替换」而不是「追加冲突」。
+// 只是从 animations 数组里摘掉旧的引用，BIN 里那几段旧数据成为无害的死字节，
+// 其余 clip 的数值/顺序一个字节都不动。
+if (replace) {
+  const before = base.json.animations.length;
+  base.json.animations = base.json.animations.filter(a => !only.has(a.name));
+  console.log('已摘除待替换的同名 clip:', before - base.json.animations.length);
+}
 
 // 新旧骨架节点按名字对齐（新增动画不会改变节点表，但仍做映射以防万一）
 const oldNames = base.json.nodes.map(n => n.name || '');

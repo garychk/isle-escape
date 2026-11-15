@@ -60,10 +60,12 @@ const dst = arg('--out', null);
 const BOB = parseFloat(arg('--bob', '0.3'));
 if (!dst) throw new Error('必须给 --out（不要直接覆盖输入文件，先备份）');
 
-const TARGETS = [
+// --clips 可指定要归一的 clip（逗号分隔）。默认仍是那 6 个空手动作；
+// 新接入的持刀动作若来自别的 Mixamo 包，也要用同一基准归一，否则切刀会平移/下沉。
+const TARGETS = (arg('--clips', '') || [
   'idle_unarmed', 'walk_unarmed', 'run_unarmed',
   'stop_walk', 'turn_left', 'turn_right',
-];
+].join(',')).split(',').map(s => s.trim()).filter(Boolean);
 
 const { json, bin } = readGLB(src);
 const NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };

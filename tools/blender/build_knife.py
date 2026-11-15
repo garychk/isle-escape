@@ -1,6 +1,10 @@
 # 战术刀 FBX → GLB（knife.glb）
 # 约定（与 rifle 一致）：原点=握把中心，刀尖朝 -Z，刀身竖直平面内
-# 源模型：刀尖 -Y、握把 +Y 端（Pipe 网格 y 1.63~3.29），总长 8.27 → 缩放到 0.72m
+# 注意：glTF 导出器还会做一次 Z-up→Y-up 变换（Blender (x,y,z) → glTF (x,z,-y)）。
+# 源模型刀尖在 -Y，要让导出后的刀尖落在 glTF -Z，Blender 里必须翻到 +Y，即绕 X 转 180°。
+# 早期版本用了 Rx(90°)，叠加导出变换后刀尖实际朝 -Y（朝下），由 character.js 的
+# orientKnifeAxis() 在运行时自动纠正；这里改成正确的角度，以后重新导出不再需要纠正。
+# 源模型：刀尖 -Y、握把 +Y 端（Pipe 网格 y 1.63~3.29），总长 8.27 → 缩放到 0.30m
 # 用法: blender --background --python tools/blender/build_knife.py -- <in.fbx> <out.glb>
 import bpy, sys, math
 from mathutils import Vector, Matrix
@@ -41,8 +45,8 @@ cx, cz = (lo.x + hi.x) / 2, (lo.z + hi.z) / 2
 s = 0.30 / max(size.x, size.y, size.z)
 print('[knife] 缩放: %.4f (总长 -> 0.30m)' % s)
 
-# M = 旋转(刀尖 -Y -> -Z) × 缩放 × 平移(握把中心->原点)
-M = Matrix.Rotation(math.radians(90), 4, 'X') \
+# M = 旋转(刀尖 -Y -> Blender +Y，导出后即 glTF -Z) × 缩放 × 平移(握把中心->原点)
+M = Matrix.Rotation(math.radians(180), 4, 'X') \
   @ Matrix.Scale(s, 4) \
   @ Matrix.Translation((-cx, -gripY, -cz))
 for o in meshes:

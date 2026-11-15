@@ -3,7 +3,7 @@
 // 放文件的约定（把 GLB 直接丢进 isle-escape/assets/）：
 //   player.glb      人物：T/A-pose + 骨骼 + 内嵌动画（Mixamo 直接可用）
 //   rifle.glb       步枪：原点在握把，枪口朝 -Z
-//   knife.glb       军刀：原点在握把，刀尖朝 -Z
+//   knife.glb       军刀：原点在握把，刀尖朝 -Z、刀背朝 +Y（刃口朝 -Y）
 //   robot.glb       机器人/敌人
 //   jeep.glb        越野车：车头朝 +Z，原点在四轮接地中心
 //   m151.glb        军用吉普（M151 MUTT）：车头朝 +Z，同上
