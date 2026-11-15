@@ -54,6 +54,10 @@ def parse_args():
     ap.add_argument('--only', default='',
                     help='只合并这些文件名主干（逗号分隔，不含扩展名）。'
                          '目录里混了别的角色（狼/鳄鱼等）时必须用它，否则会把它们的动作也挂到人物上')
+    ap.add_argument('--freeze-hips-rot', default='',
+                    help='逗号分隔的 clip 名：冻结这些动作里 Hips 的旋转曲线，只保留轨道位移和四肢动作。'
+                         '左右转身类素材自带约 90° 根骨自转，游戏里朝向由 root.rotation.y 控制，'
+                         '不冻结会叠成"转两遍 / 转身结束弹回"。只作用于列出的 clip，其它动作不受影响。')
     return ap.parse_args(argv)
 
 
@@ -376,6 +380,36 @@ def strip_root_motion(arm, action):
         log('  根位移已清除:', c)
 
 
+def freeze_hips_rotation(action):
+    """把 Hips 的旋转曲线全部压成首帧值：去掉素材自带的整体自转，
+    保留根骨位移与其它骨骼（交叉迈步、收脚、手臂摆动）的动作。
+
+    游戏里人物朝向由 root.rotation.y 单独控制，转身素材若还带 90° 根转，
+    就会变成"转两遍"，动作播完 clamp 解除时人还会猛地弹回原方向。"""
+    import re
+    hips_fc = []
+    for fc in fcurves_of(action):
+        if 'rotation_' not in fc.data_path:
+            continue
+        m = re.search(r'pose\.bones\["(.+?)"\]', fc.data_path)
+        if not m:
+            continue
+        bone = m.group(1).lower()
+        if bone == 'hips' or bone.endswith(':hips') or bone.endswith('_hips'):
+            hips_fc.append(fc)
+    if not hips_fc:
+        return False
+    for fc in hips_fc:
+        pts = fc.keyframe_points
+        if len(pts) < 2:
+            continue
+        v0 = pts[0].co[1]
+        for kp in pts:
+            kp.co[1] = v0
+        fc.update()
+    return True
+
+
 def main():
     a = parse_args()
     src = os.path.abspath(a.src)
@@ -430,6 +464,7 @@ def main():
     if arm.animation_data is None:
         arm.animation_data_create()
 
+    freeze_set = set(s.strip().lower() for s in a.freeze_hips_rot.split(',') if s.strip())
     clips = []
     for f in anims:
         stem = os.path.splitext(os.path.basename(f))[0].lower()
@@ -438,6 +473,9 @@ def main():
             log('跳过（没有动画）:', os.path.basename(f))
             drop_objects(new_objs)
             continue
+        if stem in freeze_set:
+            n_frozen = sum(1 for act in new_acts if freeze_hips_rotation(act))
+            log('  冻结 Hips 自转: %s (%d/%d 个动作)' % (stem, n_frozen, len(new_acts)))
         names = retarget(arm, new_acts, stem if not a.keep_names else stem, not a.no_strip_root)
         clips += names
         log('  + %-16s <- %-26s (%d 帧)' % (','.join(names), os.path.basename(f),

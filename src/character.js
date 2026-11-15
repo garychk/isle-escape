@@ -7,6 +7,13 @@ import { buildRifle, buildKnife } from './weapons.js';
 // 动画别名表：GLB 里的 clip 名只要命中正则就能挂上对应动作
 // 顺序有讲究：带方向后缀的必须排在 walk / run 前面，否则 walk_back 会被 /walk/ 抢走
 const ALIAS = [
+  // 空手专属的站立/停步/左右转：必须排在最前面。
+  // stop_walk 带 "walk"、idle_unarmed 带 "idle"，否则会被通用的 /walk/ /idle/ 抢走，
+  // 把持械的 walk / idle 覆盖成空手动作。
+  ['idle_unarmed', /unarm.*idle|idle.*unarm/i],
+  ['turn_right', /turn.*right|right.*turn/i],
+  ['turn_left', /turn.*left|left.*turn/i],
+  ['stop_walk', /stop.*walk|walk.*stop/i],
   // 空手走跑（Standard Walk / Running，武器收起时用）：必须排在 run / walk 前面
   ['run_unarmed', /unarm.*run|run.*unarm/i],
   ['walk_unarmed', /unarm.*walk|walk.*unarm/i],
@@ -165,6 +172,15 @@ export class Character {
     this.model.add(inst.wrap);
     this.root.add(this.model);
 
+    // Stop Walking.fbx 后半段是长时间站定，只取收脚那一秒，
+    // 否则停步后会卡在最后一帧很久才回到站立待机。只处理这个空手 clip。
+    let clips = inst.animations;
+    const swIdx = clips.findIndex(c => c.name.toLowerCase() === 'stop_walk');
+    if (swIdx >= 0 && clips[swIdx].duration > 1.6) {
+      clips = clips.slice();
+      clips[swIdx] = THREE.AnimationUtils.subclip(clips[swIdx], 'stop_walk', 0, 30, 30);
+    }
+
     this.mixer = new THREE.AnimationMixer(this.model);
     // 先按关键帧名精确对齐（run_back 不会被误当成 run），再走关键字兜底
     const take = (clip, key) => {
@@ -174,19 +190,19 @@ export class Character {
       a.__loco = LOCO.has(key);
       this.actions[key] = a;
     };
-    for (const clip of inst.animations) {
+    for (const clip of clips) {
       const n = clip.name.toLowerCase();
       const exact = ALIAS.find(([key]) => key.toLowerCase() === n);
       if (exact && !this.actions[exact[0]]) take(clip, exact[0]);
     }
-    for (const clip of inst.animations) {
+    for (const clip of clips) {
       for (const [key, re] of ALIAS) {
         if (this.actions[key] || !re.test(clip.name)) continue;
         take(clip, key);
         break;
       }
     }
-    this.clipNames = inst.animations.map(c => c.name);
+    this.clipNames = clips.map(c => c.name);
     // 手部插槽：优先右手，其次左手（不同软件命名差异都覆盖）
     this.hand = findBone(this.model, /(mixamorig)?(right|r)[_ ]?hand|hand[_ ]?r\b|wrist[_ ]?r/i)
       || findBone(this.model, /hand/i);
@@ -288,6 +304,8 @@ export class Character {
   setWeapon(kind) {
     this.wep = kind;
     if (this.weapons) for (const k of Object.keys(this.weapons)) this.weapons[k].visible = (k === kind);
+    // 6 个空手动画的 Hips 根位移已在资产层统一到持械 idle 的基准
+    // （tools/freeze_unarmed_roots.js），切武器时不需要任何运行时位置补偿。
   }
 
   // ---------------- 动画 ----------------
@@ -353,6 +371,11 @@ export class Character {
     }
     this._lastPos = st.pos.clone();
     // 朝向平滑（避免 180° 跳变时像转了半圈）
+    // 相机跟的是 player.yaw（立即响应），人物朝向必须保持原来的 dt*14。
+    // 给空手放慢会让人物比镜头慢半拍，第三人称画面里就会"晃一下 / 像硬切"。
+    const unarmed = !this.wep || this.wep === 'none';
+    // 持械期间把空手状态机的转向基准同步到当前镜头，切回空手时不会误判成一次大转身
+    if (!unarmed) { this._lastYaw = st.yaw; this._wasMoving = false; }
     let dy = st.yaw - this.yawSmooth;
     while (dy > Math.PI) dy -= Math.PI * 2;
     while (dy < -Math.PI) dy += Math.PI * 2;
@@ -361,7 +384,17 @@ export class Character {
 
     if (this.oneShotT > 0) {
       this.oneShotT -= dt;
-      if (this.oneShotT <= 0) this.oneShot = null;
+      if (this.oneShotT <= 0) {
+        this.oneShot = null; this._unShot = null;
+        this._lastYaw = st.yaw;   // 动作期间不累计转向，避免结束后误判成一次大转身
+      }
+    }
+    // 空手的一次性动作（转身/收脚）：切回持械、或重新迈步时立刻结束，交回原状态机。
+    // 持械时 _unShot 永远是 null，这里不会有任何影响。
+    if (this._unShot && (!unarmed || st.moving)) {
+      this.oneShot = null; this.oneShotT = 0; this._unShot = null;
+      this._wasMoving = false;
+      this._lastYaw = st.yaw;
     }
     if (!this.oneShot) {
       this._pickState(st, dt);
@@ -585,6 +618,13 @@ export class Character {
       return;
     }
 
+    // —— 空手专属：站立待机 / 停止走动 / 原地左转 / 原地右转 ——
+    // 只有 wep==='none' 才会进这里；持枪、持刀继续走下面的原有状态机，一行不变。
+    if (!this.wep || this.wep === 'none') {
+      this._pickUnarmed(st, dt);
+      return;
+    }
+
     // —— 瞄准/射击：身体锁镜头朝向，位移必须靠侧移/后退剪辑，否则就是横着滑 ——
     if (st.aiming && !st.moving) {
       if (this.play('aim', 0.14)) return;
@@ -612,6 +652,61 @@ export class Character {
     }
     // 持刀待机：有 knifeIdle 用格斗持械姿，否则退回普通 idle
     this.play(this.wep === 'knife' && has('knifeIdle') ? 'knifeIdle' : 'idle', 0.22);
+  }
+
+  /**
+   * 空手（wep==='none'）专用：站立待机 / 停止走动 / 原地左转 / 原地右转。
+   * 持枪、持刀不会调用本方法，_pickState 里原有的持械分支保持原样。
+   */
+  _pickUnarmed(st, dt) {
+    const has = (k) => !!this.actions[k];
+    this._turnCd = Math.max(0, (this._turnCd || 0) - dt);
+    // 本帧镜头转过的角度。yaw 增大 = 人物向左转（yaw=0 朝 -Z，fwdX=-sin(yaw)）。
+    // 动作播放期间不调用本方法，结束时 update() 会把 _lastYaw 对齐到当前 yaw，
+    // 所以不会把整段转身角度一次性当成"新转身"重复触发。
+    let dy = st.yaw - (this._lastYaw === undefined ? st.yaw : this._lastYaw);
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    this._lastYaw = st.yaw;
+
+    // 1) 迈步：沿用原来的空手走/跑（相位继承），不做任何持械动作
+    if (st.moving) {
+      // 移动时角色朝向由 TPS 按移动向量给出，转向应由根节点的平滑朝向完成。
+      // 不把镜头的小幅变化记成待播放的原地转身，避免移动结束后又补播一次转身。
+      this._lastYaw = st.yaw;
+      this._turnCd = 0;
+      const runK = has('run_unarmed') ? 'run_unarmed' : 'run';
+      const walkK = has('walk_unarmed') ? 'walk_unarmed' : 'walk';
+      this.play(st.sprint && has(runK) ? runK : (has(walkK) ? walkK : runK), 0.14, false, true);
+      this._wasMoving = true;
+      return;
+    }
+
+    // 2) 刚停下：收脚动作。淡入放缓，避免站姿在一帧里被换掉
+    if (this._wasMoving) {
+      this._wasMoving = false;
+      if (has('stop_walk') && this.play('stop_walk', 0.18, true)) {
+        this._unShot = 'stop_walk';
+        return;
+      }
+    }
+
+    // 3) 原地转身：镜头一开始就触发，动作与转向同步起步。
+    //    原先要等累计转过 30° 才播，人已经转完脚才动，看起来就是"硬切"。
+    //    冷却避免连续甩视角时不停重启动作；极慢的微调不触发。
+    if (this._turnCd <= 0 && Math.abs(dy) > 0.012) {
+      const key = dy > 0 ? 'turn_left' : 'turn_right';
+      if (has(key) && this.play(key, 0.18, true)) {
+        this._unShot = key;
+        this._turnCd = 0.3;
+        // 提前开始淡回待机，别让动作停在末帧再"啪"地切回站姿
+        this.oneShotT = this.actions[key].getClip().duration * 0.78;
+        return;
+      }
+    }
+
+    // 4) 站着不动：空手放松站姿，长一点的交叉淡化（持械的 idle / knifeIdle 不受影响）
+    this.play(has('idle_unarmed') ? 'idle_unarmed' : 'idle', 0.26);
   }
 
   /**
