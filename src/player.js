@@ -34,6 +34,14 @@ export class Player {
     this.touchMove = { x: 0, y: 0 };
     this.inX = 0; this.inZ = 0; this.inLen = 0;   // 局部输入方向（供角色朝向/侧移动画使用）
 
+    // 空手收步滑行：stop_walk 是「再迈一步把脚收回」的动作。若松开方向键就立刻
+    // 静止，脚还在动、人却不动，看起来像原地打滑。滑行时长直接取收脚动画的实际
+    // 时长，速度二次缓出到 0，让位移与动画同步结束。
+    this.stopGlide = 0;      // 剩余滑行时间（>0 时 tps 会把 moving 判为 false）
+    this.glideT = 0;         // 本次滑行总时长
+    this.glideV0 = 0;        // 松键瞬间的速度（m/s）
+    this.glideDir = new THREE.Vector3();   // 松键前的水平移动方向（单位向量）
+
     this.touchFire = false;
     this.aiming = false;
     this.aimHold = false;   // 右键按住
@@ -206,6 +214,7 @@ export class Player {
   switchWep(w) {
     if (this.reloadT > 0 || w === this.wep) return;
     this.wep = w;
+    this.stopGlide = 0; this.glideT = 0; this.glideV0 = 0;  // 切武器立刻收掉空手滑行
     // 军刀 / 空手都没有抵肩瞄准姿态：切过去时解除锁定；空手时连右键瞄准也停掉
     if (w !== 'rifle') {
       this.aimLatch = false;
@@ -285,6 +294,36 @@ export class Player {
       this.rollT -= dt;
       const rs = 7.6 * dt;
       mx += fwdX * rs; mz += fwdZ * rs;
+    }
+
+    // —— 空手收步滑行（持枪/持刀完全不进这段）——
+    // 位移按 stop_walk 的动画时长缓出：u 从 1 → 0，速度 = 原速 × u²，
+    // 积分约 1/3，2.76m/s × 1s ≈ 0.9m，正好是收脚那最后一步的距离。
+    if (this.wep === 'none') {
+      if (L > 0.01 && this.onGround && this.rollT <= 0) {
+        const len = Math.hypot(mx, mz);
+        if (len > 1e-5) {
+          this.glideDir.set(mx / len, 0, mz / len);
+          this.glideV0 = len / Math.max(dt, 1e-4);
+        }
+        this.stopGlide = 0; this.glideT = 0;
+      } else if (this.stopGlide <= 0 && this.glideV0 > 0.35 && this.onGround) {
+        // 刚松键：滑行时长直接取收脚动画的 clip 时长，保证「动画播完人才停」
+        const a = this.tps && this.tps.char && this.tps.char.actions.stop_walk;
+        this.glideT = a ? a.getClip().duration : 1.0;
+        this.stopGlide = this.glideT;
+      }
+      if (this.stopGlide > 0) {
+        const u = this.stopGlide / Math.max(this.glideT, 1e-4);
+        const g = this.glideV0 * u * u * dt;
+        mx += this.glideDir.x * g;
+        mz += this.glideDir.z * g;
+        this.stopGlide = Math.max(0, this.stopGlide - dt);
+        if (this.stopGlide <= 0) { this.glideV0 = 0; this.glideT = 0; }
+      }
+    } else if (this.stopGlide || this.glideV0) {
+      // 切回持械：立即结束滑行，持械的停止行为保持原样
+      this.stopGlide = 0; this.glideT = 0; this.glideV0 = 0;
     }
 
     // —— 碰撞 ——
