@@ -18,3 +18,7 @@ desktop.ini
 # 日志与临时文件
 *.log
 *.tmp
+.opt-tmp/
+
+# 优化后的资产（由 tools/optimize_assets.mjs 与 shrink_hdr.mjs 生成，可从 assets/ 重建）
+assets_opt/

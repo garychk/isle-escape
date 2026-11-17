@@ -278,6 +278,12 @@ export class UI {
     setTimeout(() => { t.classList.remove('on'); setTimeout(() => t.remove(), 350); }, 3200);
     while (this.toastsEl.children.length > 3) this.toastsEl.firstChild.remove();
   }
+  /** 更新 HUD 中央的"任务目标"框（复用 index.html 已有的 #objbox 结构） */
+  setObjective(title, descHTML) {
+    if (!this._objTitle) { this._objTitle = $('objtitle'); this._objDesc = $('objdesc'); }
+    if (this._objTitle && title != null) this._objTitle.textContent = title;
+    if (this._objDesc && descHTML != null) this._objDesc.innerHTML = descHTML;
+  }
   locCard(name, sub) {
     $('locname').textContent = name;
     $('locsub').textContent = sub;

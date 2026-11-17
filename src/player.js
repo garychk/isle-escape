@@ -1,6 +1,6 @@
 // 玩家：第一人称控制 / 步枪 + 军刀 / 生命体力 / 拾取 / 受击与中毒
 import * as THREE from 'three';
-import { CFG, RAFT, BOAT, PICKUPS, POND, SWAMP } from './config.js';
+import { CFG, RAFT, BOAT, PICKUPS, POND, SWAMP, CAMPFIRE } from './config.js';
 import { clamp, dist2, pushOutCircles } from './util.js';
 import { groundHeight, zoneState } from './terrain.js';
 import { colliders } from './flora.js';
@@ -421,6 +421,7 @@ export class Player {
       if (dist2(this.pos.x, this.pos.z, p.x, p.z) < 2.1) { near = p; break; }
     }
     const boatD = dist2(this.pos.x, this.pos.z, BOAT.x, BOAT.z);
+    const campD = dist2(this.pos.x, this.pos.z, CAMPFIRE.x, CAMPFIRE.z);
     if (near) {
       this.ui.prompt('E', near.type === 'ammo' ? '拾取弹药 (+30)' : '拾取急救包 (+40 生命)', () => {
         near.taken = true; near.mesh.visible = false; sfx.pickup();
@@ -428,6 +429,13 @@ export class Player {
         else { this.hp = Math.min(CFG.HP_MAX, this.hp + 40); sfx.heal(); }
         this.ui.updateAmmo(this);
         this.ui.toast(near.type === 'ammo' ? '已拾取弹药' : '已使用急救包');
+      });
+    } else if (campD < 3.2 && this.hp < CFG.HP_MAX) {
+      this.ui.prompt('E', '在篝火旁休息 · 恢复全部生命', () => {
+        this.hp = CFG.HP_MAX;
+        this.poisonT = 0;
+        sfx.heal();
+        this.ui.toast('篝火旁稍作休整，伤势痊愈');
       });
     } else if (this.vehicles && (this._nearVeh = this.vehicles.find(v => !v.driver && v.near(this.pos.x, this.pos.z, 3.6)))) {
       const v = this._nearVeh;

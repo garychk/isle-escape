@@ -27,7 +27,139 @@ export function buildStructures(scene) {
   buildRaft(g);
   buildWreck(g);
   buildCabin(g);
+  buildLandmarks(g);
   return g;
+}
+
+// ================= 场景地标：让沿途不再是一条空走廊 =================
+// 全部程序化几何，不依赖外部资产；放在小径支线附近，靠近就有探索奖励。
+function buildLandmarks(g) {
+  const metal = new THREE.MeshStandardMaterial({ color: 0x70776f, roughness: 0.72, metalness: 0.35 });
+  const rust = new THREE.MeshStandardMaterial({ color: 0x6e4a37, roughness: 0.92, metalness: 0.15 });
+  const tarp = new THREE.MeshStandardMaterial({ color: 0x3f5340, roughness: 0.95, side: THREE.DoubleSide });
+  const ember = new THREE.MeshBasicMaterial({ color: 0xff8a3c });
+
+  // 1) 瞭望塔：密林腹地 (-58,112) 旁，木质高台 + 梯子 + 顶棚
+  watchTower(g, -64, 108);
+
+  // 2) 失事运输机残骸：林间空地 (44,95)，断裂机身 + 机翼 + 散落碎片
+  planeWreck(g, 44, 95, metal, rust);
+
+  // 3)  abandoned 营地：沼泽边 (70,30)，帐篷 + 篝火（带点光源）
+  campFire(g, 70, 30, tarp, woodDark, ember);
+
+  // 4) 北岸信号塔：给终点一个清晰的地标
+  signalTower(g, 16, -205, metal, rust);
+}
+
+function watchTower(g, x, z) {
+  const y = baseHeight(x, z);
+  const t = new THREE.Group();
+  t.position.set(x, y, z);
+  const legH = 6.2, spread = 1.5;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.18, legH, 6), woodDark);
+    leg.position.set(sx * spread, legH / 2, sz * spread);
+    leg.rotation.z = -sx * 0.06; leg.rotation.x = sz * 0.06;
+    leg.castShadow = true; t.add(leg);
+  }
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.24, 4.2), woodMat);
+  deck.position.y = legH; deck.castShadow = deck.receiveShadow = true; t.add(deck);
+  // 栏杆
+  for (const [px, pz, w, d] of [[0, 2.05, 4.2, 0.12], [0, -2.05, 4.2, 0.12], [2.05, 0, 0.12, 4.2], [-2.05, 0, 0.12, 4.2]]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(w, 0.9, d), woodDark);
+    rail.position.set(px, legH + 1.05, pz); t.add(rail);
+  }
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(3.2, 1.6, 4), tarpMat());
+  roof.position.y = legH + 2.9; roof.rotation.y = Math.PI / 4; roof.castShadow = true; t.add(roof);
+  // 斜梯
+  for (let i = 0; i < 10; i++) {
+    const rung = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.09, 0.18), woodMat);
+    rung.position.set(0, 0.5 + i * 0.56, 2.6 - i * 0.06); t.add(rung);
+  }
+  g.add(t);
+  colliders.push({ x, z, r: 2.0 });
+}
+
+function tarpMat() {
+  return new THREE.MeshStandardMaterial({ color: 0x46543e, roughness: 0.95, side: THREE.DoubleSide });
+}
+
+function planeWreck(g, x, z, metal, rust) {
+  const y = baseHeight(x, z);
+  const p = new THREE.Group();
+  p.position.set(x, y, z);
+  p.rotation.y = -0.5;
+  // 断裂机身（两段）
+  const body1 = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.35, 6.5, 12), metal);
+  body1.rotation.z = Math.PI / 2; body1.position.set(-1.5, 1.35, 0); body1.castShadow = true; p.add(body1);
+  const body2 = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.25, 4.0, 12), rust);
+  body2.rotation.z = Math.PI / 2; body2.rotation.x = 0.25;
+  body2.position.set(4.0, 1.7, 1.2); body2.castShadow = true; p.add(body2);
+  // 机翼
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.18, 11), metal);
+  wing.position.set(-1.5, 1.0, 0); wing.rotation.z = 0.18; wing.castShadow = true; p.add(wing);
+  // 尾翼
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.6, 2.2), rust);
+  tail.position.set(5.6, 2.6, 1.2); tail.castShadow = true; p.add(tail);
+  // 散落碎片
+  for (let i = 0; i < 7; i++) {
+    const d = new THREE.Mesh(new THREE.BoxGeometry(0.6 + rng() * 0.8, 0.08, 0.5 + rng() * 0.7), rust);
+    d.position.set((rng() - 0.5) * 16, 0.1, (rng() - 0.5) * 14);
+    d.rotation.set(rng(), rng() * 6.28, rng()); p.add(d);
+  }
+  g.add(p);
+  colliders.push({ x, z, r: 3.2 });
+}
+
+function campFire(g, x, z, tarp, woodDark, ember) {
+  const y = baseHeight(x, z);
+  const c = new THREE.Group();
+  c.position.set(x, y, z);
+  // 帐篷
+  const tent = new THREE.Mesh(new THREE.ConeGeometry(2.2, 2.8, 4), tarp);
+  tent.rotation.y = Math.PI / 4; tent.position.set(-3.5, 1.4, 0); tent.castShadow = true; c.add(tent);
+  // 篝火石圈 + 木柴
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const st = new THREE.Mesh(new THREE.DodecahedronGeometry(0.28, 0), rockMat);
+    st.position.set(Math.cos(a) * 0.9, 0.12, Math.sin(a) * 0.9); c.add(st);
+  }
+  for (let i = 0; i < 4; i++) {
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 1.4, 6), woodDark);
+    log.rotation.z = Math.PI / 2; log.rotation.y = (i / 4) * Math.PI;
+    log.position.y = 0.2; c.add(log);
+  }
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.9, 8), ember);
+  flame.position.y = 0.65; flame.name = 'campflame'; c.add(flame);
+  const light = new THREE.PointLight(0xff7a30, 2.2, 14, 2);
+  light.position.set(0, 1.1, 0); c.add(light);
+  g.add(c);
+  colliders.push({ x: x - 3.5, z, r: 1.6 });
+}
+
+function signalTower(g, x, z, metal, rust) {
+  const y = baseHeight(x, z);
+  const s = new THREE.Group();
+  s.position.set(x, y, z);
+  const H = 11;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, H, 6), rust);
+    leg.position.set(sx * 1.2, H / 2, sz * 1.2);
+    leg.rotation.z = -sx * 0.045; leg.rotation.x = sz * 0.045; leg.castShadow = true; s.add(leg);
+  }
+  for (let k = 1; k <= 4; k++) {
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.12, 0.12), metal);
+    beam.position.y = k * 2.4; s.add(beam);
+    const beam2 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 2.5), metal);
+    beam2.position.y = k * 2.4; s.add(beam2);
+  }
+  const dish = new THREE.Mesh(new THREE.SphereGeometry(1.5, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2.4), metal);
+  dish.position.y = H + 0.6; dish.rotation.x = -0.5; dish.castShadow = true; s.add(dish);
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff3b30 }));
+  beacon.position.y = H + 1.8; s.add(beacon);
+  g.add(s);
+  colliders.push({ x, z, r: 1.6 });
 }
 
 // ================= 林中木屋（两层架空棚屋，门朝 +Z 朝小径） =================

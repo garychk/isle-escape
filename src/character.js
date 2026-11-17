@@ -231,6 +231,29 @@ export class Character {
       clips = clips.slice();
       clips[slIdx] = THREE.AnimationUtils.subclip(clips[slIdx], 'slash', 9, 49, 30);
     }
+    // 素材包没有 fall / land：原来整个腾空阶段都定格在 jump 末帧，落地瞬间硬切回走。
+    // 从 jump 自身派生两段：
+    //   jump  → 0~0.32s 蹬地起跳（保留原 clip 名前 10 帧，播完即止）
+    //   fall  → 0.30~0.60s「收腿准备落地」循环，接在起跳后面
+    // 再加程序化的落地屈膝缓冲（_poseAirLand），整体就是起跳→空中收腿→落地回弹。
+    const jpIdx = clips.findIndex(c => c.name.toLowerCase() === 'jump');
+    if (jpIdx >= 0) {
+      const jc = clips[jpIdx];
+      clips = clips.slice();
+      clips[jpIdx] = THREE.AnimationUtils.subclip(jc, 'jump', 0, 11, 30);      // ~0.37s 起跳
+      const fall = THREE.AnimationUtils.subclip(jc, 'fall', 10, jc.duration * 30 - 1, 30);
+      if (fall.duration > 0.12) clips.push(fall);
+    }
+    // turn_left/right 原片 1.1~1.2s 是「转过去→站定」的完整过程；root 朝向同时由
+    // 代码以 dt*14 快速跟随，两套旋转叠加就成了「先甩一下再补转」。只取起步迈步的
+    // 前半段，让动画做「迈一步」的细节，整段转向交给 root，自然且不滑步。
+    clips = clips.slice();
+    for (let i = 0; i < clips.length; i++) {
+      const n = clips[i].name.toLowerCase();
+      if (n === 'turn_left' || n === 'turn_right') {
+        clips[i] = THREE.AnimationUtils.subclip(clips[i], n, 0, Math.round(clips[i].duration * 30 * 0.55), 30);
+      }
+    }
 
     this.mixer = new THREE.AnimationMixer(this.model);
     // 先按关键帧名精确对齐（run_back 不会被误当成 run），再走关键字兜底
@@ -283,6 +306,13 @@ export class Character {
     // 右肩骨（枪托抵肩锚点用）
     const rChain = this.armsIK.find(c => c.side === 'Right');
     this.shoulderR = rChain ? rChain.arm : null;
+    // 落地缓冲用的骨骼（懒解析一次）；mixer 每帧会重写这些骨，程序化修正必须放在 mixer.update 之后
+    this.landBones = {
+      hips: findBone(this.model, /mixamorig:?hips$/i),
+      upL: findBone(this.model, /leftupleg/i), upR: findBone(this.model, /rightupleg/i),
+      loL: findBone(this.model, /^mixamorig:leftleg$/i), loR: findBone(this.model, /^mixamorig:rightleg$/i),
+    };
+    if (this.landBones.hips) this.hipsY0 = this.landBones.hips.position.y;
     this.play('idle', 0);
   }
 
@@ -430,6 +460,14 @@ export class Character {
     if (!this.root.visible) return;
 
     this.root.position.copy(st.pos);
+    // 落地检测：由"腾空→接地"触发一段屈膝缓冲（素材包没有 land 动画）
+    if (st.onGround && this._wasOnGround === false && !st.dead && !st.driving) {
+      this._landT = 0.34;
+      this._landImpact = Math.min(1, Math.abs(this._lastVy || 0) / 9);
+    }
+    this._wasOnGround = st.onGround;
+    this._lastVy = st.vy || 0;
+    if (this._landT > 0) this._landT = Math.max(0, this._landT - dt);
     // 实际移动速度（水平面），用于步频自适应，防止脚底打滑
     if (this._lastPos && dt > 0.001) {
       const dx = st.pos.x - this._lastPos.x, dz = st.pos.z - this._lastPos.z;
@@ -481,6 +519,8 @@ export class Character {
       // 持刀时把四指/拇指再往里扣一扣，让刀柄真正被攥在掌心里。
       // 必须放在 mixer.update 之后：动画每帧会重写骨骼，提前改会被覆盖。
       this._gripFingers();
+      // 落地屈膝缓冲：素材没有 land 动画，用一段 0.3s 的程序化下蹲吸收冲击
+      this._poseLanding(dt, st);
       // 有 drive 动画就交给动画，没有才用程序化坐姿兜底
       if (st.driving && !this.actions.drive) this._sitPose();
     } else this._posePlaceholder(dt, st);
@@ -720,10 +760,16 @@ export class Character {
     if (st.rollT > 0 && this.trigger('roll', 0.1)) return;
 
     if (!st.onGround) {
-      // 上升段播起跳（一次性，播完定住）；下落段优先 fall，没有 fall 就保持起跳姿
-      if (st.vy > 0.5) { this.play('jump', 0.10, true); return; }
-      if (this.play('fall', 0.14)) return;
-      this.play('jump', 0.12, true);
+      // 上升段播起跳；下落段播 fall（从 jump 后段派生）。
+      // 注意：play() 在目标已是 current 时返回 false，这里不能用返回值判断"是否已在播"，
+      // 否则下落中每帧都会 fallback 去 play('jump') 把 fall 打断。直接按 key 判断。
+      if (st.vy > 0.5) {
+        this.play('jump', 0.08, true);
+      } else if (this.actions.fall) {
+        this.play('fall', 0.14);
+      } else {
+        this.play('jump', 0.12, true);   // 没有 fall 的老素材：保持起跳姿
+      }
       return;
     }
 
@@ -821,22 +867,45 @@ export class Character {
       }
     }
 
-    // 3) 原地转身：镜头一开始就触发，动作与转向同步起步。
-    //    原先要等累计转过 30° 才播，人已经转完脚才动，看起来就是"硬切"。
-    //    冷却避免连续甩视角时不停重启动作；极慢的微调不触发。
-    if (this._turnCd <= 0 && Math.abs(dy) > 0.012) {
+    // 3) 原地转身：只有明显的转头/转身才播迈步动作（原阈值 0.012 rad≈0.7° 太低，
+    //    鼠标微小抖动就触发，站着不动时不停播转身，非常不自然）。提到 ~4.6°，
+    //    并拉长冷却，让细碎的视角微调直接由 root 平滑跟随吸收。
+    if (this._turnCd <= 0 && Math.abs(dy) > 0.08) {
       const key = dy > 0 ? 'turn_left' : 'turn_right';
-      if (has(key) && this.play(key, 0.18, true)) {
+      if (has(key) && this.play(key, 0.16, true)) {
         this._unShot = key;
-        this._turnCd = 0.3;
+        this._turnCd = 0.55;
         // 提前开始淡回待机，别让动作停在末帧再"啪"地切回站姿
-        this.oneShotT = this.actions[key].getClip().duration * 0.78;
+        this.oneShotT = this.actions[key].getClip().duration * 0.72;
         return;
       }
     }
 
     // 4) 站着不动：空手放松站姿，长一点的交叉淡化（持械的 idle / knifeIdle 不受影响）
     this.play(has('idle_unarmed') ? 'idle_unarmed' : 'idle', 0.26);
+  }
+
+  /**
+   * 程序化落地缓冲：素材无 land 动画，接地后 0.34s 内髋部下沉→回弹、膝盖弯曲。
+   * 放在 mixer.update 之后执行，动画每帧重写骨骼也盖不掉这段修正。
+   */
+  _poseLanding(dt, st) {
+    if (!this._landT || !this.landBones || !this.landBones.hips || st.dead || st.driving) return;
+    const b = this.landBones;
+    // 相位 0→1：下沉到最低点(0.35)再弹回。sin 曲线天然首尾为 0，不会突跳
+    const u = 1 - this._landT / 0.34;
+    const squash = Math.sin(Math.PI * u) * (0.05 + 0.16 * (this._landImpact || 0.5));
+    const knee = squash * 2.2;
+    b.hips.position.y = this.hipsY0 - squash;
+    if (b.upL) b.upL.rotation.x += knee * 0.55;
+    if (b.upR) b.upR.rotation.x += knee * 0.55;
+    if (b.loL) b.loL.rotation.x -= knee;
+    if (b.loR) b.loR.rotation.x -= knee;
+    // 上身后仰一点点，重心随下蹲后移
+    if (this.actions.jump && this.current === this.actions.jump) {
+      const spine = this.landBones.spine || (this.landBones.spine = findBone(this.model, /^mixamorig:spine$/i));
+      if (spine) spine.rotation.x -= squash * 0.35;
+    }
   }
 
   /**

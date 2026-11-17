@@ -8,6 +8,7 @@ import { BeastManager, makeParticles, updateParticles } from './animals.js';
 import { Env } from './env.js';
 import { Player } from './player.js';
 import { UI } from './ui.js';
+import { Quests } from './quests.js';
 import { TPS } from './tps.js';
 import { loadAssets, setAssetEnv } from './assets.js';
 import { loadPBR, applyTerrainPBR, loadSkyEnv } from './pbr.js';
@@ -62,7 +63,7 @@ scene.add(camera);
 // —— 世界构建（分步展示进度） ——
 const bootFill = document.getElementById('boot-fill');
 const bootMsg = document.getElementById('boot-msg');
-let player, beasts, ui, particles, tps;
+let player, beasts, ui, particles, tps, quests;
 let state = 'title';
 let playTime = 0;
 let bridgeImpulse = 0;
@@ -112,6 +113,7 @@ async function boot() {
   game.player = player;
   game.beasts = beasts;
   beasts.onSfx = (name, x, z) => { const s = sfx[name]; s && s(); };
+  quests = new Quests(ui, beasts);
   await step('准备出发', 100);
   startAmbient();
   startBGM();
@@ -134,8 +136,9 @@ const game = {
     ui.showHUD();
     resume();
     lockPointer();
-    ui.toast('向北穿过密林，在北岸登上渔船离岛');
+    ui.toast('任务：向北穿过密林，在北岸登上渔船离岛');
     setTimeout(() => ui.toast('枪声会引来野兽——但也救你一命'), 4200);
+    if (quests) quests.start();
   },
   pause() {
     if (state !== 'playing' || (player && (player.dead || player.win))) return;
@@ -295,6 +298,7 @@ function loop() {
     if (bridgePlanks) { bridgePlanks.position.y = sway; bridgePlanks.rotation.z = Math.sin(bridgeState.t * 1.1) * 0.006 * bridgeImpulse; }
 
     player.update(dt, sway);
+    if (quests) quests.update(dt, player);
     if (tps) tps.update(dt);
     beasts.update(dt, player, t);
     const zone = zoneState(player.pos.x, player.pos.z);
@@ -323,6 +327,7 @@ function loop() {
     if (ui.updateAlmanac) ui.updateAlmanac(env);
     // 胜利演出
     if (player.win) {
+      if (quests) quests.onWin();
       player.finishT += dt;
       if (player.finishT > 1.6) state = 'over';
     }

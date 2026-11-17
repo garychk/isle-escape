@@ -23,7 +23,14 @@ const server = createServer(async (req, res) => {
   try {
     let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     if (p === '/' || p === '/dist' || p === '/dist/') p = '/dist/index.html';
-    const file = normalize(join(ROOT, p));
+    let file = normalize(join(ROOT, p));
+    // 资产优化优先：若 assets_opt/ 存在同名文件（GLB/贴图），优先从优化目录读取。
+    // 原始 assets/ 保留在 git 中做备份/回退，不需要改任何游戏源码。
+    if (p.startsWith('/assets/')) {
+      const rel = p.slice('/assets/'.length);
+      const optimized = normalize(join(ROOT, 'assets_opt', rel));
+      if ((rel.endsWith('.glb') || rel.startsWith('tex/')) && await stat(optimized).catch(() => null)) file = optimized;
+    }
     if (!file.startsWith(ROOT + sep) && file !== ROOT) { res.writeHead(403); return res.end('403'); }
     const st = await stat(file).catch(() => null);
     if (!st || st.isDirectory()) { res.writeHead(404); return res.end('404'); }

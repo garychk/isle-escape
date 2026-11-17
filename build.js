@@ -4,10 +4,21 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const root = __dirname;
-const esbuild = path.resolve(__dirname, '..', 'qa', 'node_modules', 'esbuild', 'bin', 'esbuild');
+// esbuild 查找顺序：项目本地 → 原 qa 目录 → 环境变量指定（换机器时用 ESBUILD_PATH 指定）
+const esbuildCandidates = [
+  path.join(root, 'node_modules', 'esbuild', 'bin', 'esbuild'),
+  path.resolve(root, '..', 'qa', 'node_modules', 'esbuild', 'bin', 'esbuild'),
+  process.env.ESBUILD_PATH,
+].filter(Boolean);
+const esbuild = esbuildCandidates.find(p => fs.existsSync(p));
+if (!esbuild) {
+  console.error('找不到 esbuild。请执行 npm install esbuild，或设置 ESBUILD_PATH 指向 esbuild 可执行文件。');
+  process.exit(1);
+}
 const minify = !process.argv.includes('--dev');
 
-execFileSync(process.execPath, [esbuild,
+// esbuild 的 bin/esbuild 是原生二进制，直接执行（不要 node 包一层）
+execFileSync(esbuild, [
   path.join(root, 'src', 'main.js'),
   '--bundle',
   '--format=iife',
@@ -20,13 +31,17 @@ execFileSync(process.execPath, [esbuild,
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const js = fs.readFileSync(path.join(root, 'bundle.js'), 'utf8');
 
-// —— 资产：多文件模式直接拷贝；--single 模式才内联成 data URI ——
-const KNOWN = ['player', 'robot', 'rifle', 'knife', 'jeep', 'm151', 'cabin', 'medkit', 'boat', 'rock', 'dino', 'mutant', 'wolf', 'stump', 'zombie'];
+// —— 资产：优先使用 assets_opt/（tools/optimize_assets.mjs 生成的压缩版），
+//    没有时用原始 assets/。原始文件保留可回退 ——
+const optRoot = path.join(root, 'assets_opt');
+const useOpt = fs.existsSync(optRoot);
+const glbDir = useOpt ? optRoot : path.join(root, 'assets');
+const KNOWN = ['player', 'robot', 'rifle', 'knife', 'jeep', 'm151', 'cabin', 'medkit', 'boat', 'rock', 'dino', 'mutant', 'wolf', 'stump', 'zombie', 'reef'];
 const single = process.argv.includes('--single');
 const assetData = {};
 const audioData = {};
 if (single) {
-  const dir = path.join(root, 'assets');
+  const dir = glbDir;
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
       if (f.endsWith('.glb')) {
@@ -34,10 +49,15 @@ if (single) {
         if (!KNOWN.includes(name)) continue;
         assetData[name] = 'data:model/gltf-binary;base64,' +
           fs.readFileSync(path.join(dir, f)).toString('base64');
-      } else if (f.endsWith('.ogg') || f.endsWith('.mp3')) {
-        const mime = f.endsWith('.mp3') ? 'audio/mpeg' : 'audio/ogg';
-        audioData[f] = 'data:' + mime + ';base64,' + fs.readFileSync(path.join(dir, f)).toString('base64');
       }
+    }
+  }
+  // 音频仍在原始 assets/（未优化）
+  const adir = path.join(root, 'assets');
+  for (const f of fs.readdirSync(adir)) {
+    if (f.endsWith('.ogg') || f.endsWith('.mp3')) {
+      const mime = f.endsWith('.mp3') ? 'audio/mpeg' : 'audio/ogg';
+      audioData[f] = 'data:' + mime + ';base64,' + fs.readFileSync(path.join(adir, f)).toString('base64');
     }
   }
 }
@@ -61,18 +81,22 @@ if (!single) {
   const adir = path.join(dist, 'assets');
   const sdir = path.join(root, 'assets');
   let copied = 0, bytes = 0;
-  // 递归拷贝整棵 assets/（含 tex/ 子目录），以后新增素材无需改构建脚本
-  const copyTree = (src, dst) => {
+  // 递归拷贝整棵 assets/。GLB 与 tex/ 若有优化版则从 assets_opt/ 取，
+  // 音频等其他文件仍取原始 assets/。
+  const copyTree = (src, dst, optSrc) => {
     if (!fs.existsSync(dst)) fs.mkdirSync(dst, { recursive: true });
     for (const e of fs.readdirSync(src, { withFileTypes: true })) {
       const sp = path.join(src, e.name), dp = path.join(dst, e.name);
-      if (e.isDirectory()) { copyTree(sp, dp); continue; }
+      const op = optSrc ? path.join(optSrc, e.name) : null;
+      const hasOpt = op && fs.existsSync(op);
+      if (e.isDirectory()) { copyTree(sp, dp, hasOpt ? op : null); continue; }
       if (/^_/.test(e.name) || /\.(blend|tmp|bak|psd)$/i.test(e.name)) continue;
-      fs.copyFileSync(sp, dp);
-      copied++; bytes += fs.statSync(sp).size;
+      const from = hasOpt && (e.name.endsWith('.glb') || src.endsWith('tex')) ? op : sp;
+      fs.copyFileSync(from, dp);
+      copied++; bytes += fs.statSync(from).size;
     }
   };
-  copyTree(sdir, adir);
+  copyTree(sdir, adir, useOpt ? optRoot : null);
   console.log(`written: ${dist} (index.html + bundle.js + ${copied} 个资产文件, ${(bytes / 1024 / 1024).toFixed(1)} MB)`);
   console.log('启动: node serve.mjs  →  http://localhost:8137/');
 } else {
