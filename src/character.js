@@ -60,14 +60,19 @@ const NATIVE_SPEED = {
   // 空手走跑（标准 Walk / Running，原地动画，无根位移）：
   // 用"支撑相脚掌相对身体的后移速度"实测，并用 walk/run 的已知根位移速度定标
   walk_unarmed: 2.50, run_unarmed: 7.60,
+  // 持刀挪步（Walking (3).fbx）：素材一个循环 1.033s 只前移 0.50m，是慢挪步；
+  // 游戏持刀速度 2.4*1.12=2.69m/s，播放速率由 update() 自适应并限幅到 1.7x，
+  // 既不变成慢动作、也不至于快放到糊。
+  knifeWalk: 1.60,
 };
 
 // 属于"位移循环"的剪辑：切换时沿用彼此的相位，脚不跳
 const LOCO = new Set(['walk', 'run', 'walk_back', 'run_back', 'strafe_l', 'strafe_r',
-  'crouchWalk', 'crouchIdle', 'aimWalk', 'walk_unarmed', 'run_unarmed']);
+  'crouchWalk', 'crouchIdle', 'aimWalk', 'walk_unarmed', 'run_unarmed', 'knifeWalk']);
 
-// 军刀待机姿态：刀尖向前上方 45°，刀身（绕自身轴）微微向左倾
-const KNIFE_PITCH = Math.PI / 4;   // 45°
+// 军刀待机姿态：刀身近乎竖直（与水平面约 80°，只微微前倾），
+// 这样握把顺着拳头的握持轴穿过掌心，不会斜插在手腕外侧；刀身绕自身轴微微向左倾。
+const KNIFE_PITCH = THREE.MathUtils.degToRad(80);
 const KNIFE_ROLL = 0.20;           // 约 11.5°，正角度 = 刀背上缘向人物左侧倾
 // 挥砍时刀身放平、倾角收小；动作速率单独由 trigger 的 rate 控制
 const KNIFE_SWING_PITCH = 0.12;
@@ -77,7 +82,7 @@ export const SLASH_RATE = 1.65;    // 裁后的 1.33s 挥刀剪辑 → 0.81s
 // _poseWeapon / IK 用的临时对象（避免每帧分配）
 const _vA = new THREE.Vector3(), _vB = new THREE.Vector3(), _vC = new THREE.Vector3(), _vD = new THREE.Vector3(),
   _vE = new THREE.Vector3(), _vF = new THREE.Vector3(), _vG = new THREE.Vector3(), _vH = new THREE.Vector3(),
-  _vI = new THREE.Vector3(), _vJ = new THREE.Vector3();
+  _vI = new THREE.Vector3(), _vJ = new THREE.Vector3(), _vK = new THREE.Vector3();
 const _qA = new THREE.Quaternion(), _qB = new THREE.Quaternion(), _qC = new THREE.Quaternion(),
   _qD = new THREE.Quaternion(), _qE = new THREE.Quaternion(), _qF = new THREE.Quaternion();
 const _mA = new THREE.Matrix4();
@@ -661,7 +666,7 @@ export class Character {
     const sway = Math.sin(t * (st.sprint ? 9 : 5)) * (st.moving ? 0.05 : 0.015);
     let pitch;
     if (isKnife) {
-      pitch = swinging ? KNIFE_SWING_PITCH : KNIFE_PITCH;   // 待机 45° 向前上，挥砍时放平
+      pitch = swinging ? KNIFE_SWING_PITCH : KNIFE_PITCH;   // 待机近乎竖直，挥砍时放平
     } else {
       // 枪：瞄准时跟随镜头俯仰（视觉减半，避免大仰角时机匣横穿头部；
       // 弹道不受影响——曳光弹始终从枪口连向准星），腰射时枪口下压 ~24°（低姿持枪）
@@ -678,7 +683,7 @@ export class Character {
       _qB.setFromRotationMatrix(_mA);
       _qB.multiply(_qC.setFromAxisAngle(_AXIS_Z, swinging ? KNIFE_SWING_ROLL : KNIFE_ROLL));
 
-      // 待机：刀稳稳握在手里，就是 45° 向前上 + 微左倾（不跟着手腕的呼吸摆动乱晃）。
+      // 待机：刀稳稳握在手里，就是 80° 近乎竖直 + 微左倾（不跟着手腕的呼吸摆动乱晃）。
       // 挥砍：取"手骨相对 root 的旋转增量"叠加到持刀姿态，整条手臂的摆动直接传给刀，
       //       否则刀会像一块铁板钉在角色身上。起手瞬间重新标定基准，避免姿态跳变。
       this.root.getWorldQuaternion(_qA);
@@ -721,7 +726,11 @@ export class Character {
     w.position.lerp(target, Math.min(1, dt * 20));
   }
 
-  /** 掌心握点（世界坐标）：腕骨→四指指根 55%，再沿掌面向拇指侧偏 8mm */
+  /**
+   * 掌心握点（世界坐标）。刀身竖直后，刀轴必须真的穿过拳头被四指包住的空腔，
+   * 否则握把会贴在虎口外侧、看起来像"粘"在手上。
+   * 用四指指根 / 指尖实测校准：原 55% 位置比拳心偏手腕侧约 2.7cm、掌宽偏 8mm。
+   */
   _knifeGripPoint(out) {
     const hand = this.hand;
     if (!hand) return out.set(0.18, 1.25, -0.1).applyMatrix4(this.root.matrixWorld);
@@ -730,12 +739,16 @@ export class Character {
     const knuckle = _vF.set(0, 0, 0);
     for (const b of this.knucklesR) knuckle.add(b.getWorldPosition(_vH));
     knuckle.divideScalar(this.knucklesR.length);
-    // 食指根 - 小指根 = 掌宽方向；与"腕→指根"叉乘得到掌面法向（拇指侧）
+    // 食指根 - 小指根 = 掌宽方向；与"腕→指根"叉乘得到掌面法向
     const span = _vG.subVectors(this.knucklesR[0].getWorldPosition(_vH),
       this.knucklesR[this.knucklesR.length - 1].getWorldPosition(_vI)).normalize();
     const fingerDir = _vJ.subVectors(knuckle, wrist).normalize();
-    span.cross(fingerDir).normalize();
-    return out.copy(wrist).lerp(knuckle, 0.55).addScaledVector(span, 0.008);
+    const normal = _vK.crossVectors(span, fingerDir).normalize();
+    out.copy(wrist).lerp(knuckle, 0.78)          // 往指尖侧移 2.7cm，刀轴落在拳心
+      .addScaledVector(span, -0.008)             // 掌宽方向再对齐 8mm
+      .addScaledVector(normal, 0.010);           // 略微贴向掌面内侧
+    out.y += 0.012;                             // 护手贴住虎口、刀尾只露一小截
+    return out;
   }
 
   /** 持刀时把手指再往掌心扣一些（mixer.update 之后调用，否则会被动画覆盖） */
@@ -811,8 +824,9 @@ export class Character {
     }
 
     if (st.moving) {
-      // 持刀移动用专属姿势（Jab Cross.fbx）；冲刺仍走原来的 run，避免腿部节奏对不上。
-      // 只影响 wep==='knife'，持枪/空手的移动分支完全不变。
+      // 持刀移动用专属挪步（Walking (3).fbx），W 前进 / S 后退共用这一个循环；
+      // 冲刺仍走原来的 run，避免腿部节奏对不上。只影响 wep==='knife'，
+      // 持枪/空手的移动分支完全不变。
       if (this.wep === 'knife' && !st.sprint && has('knifeWalk')) {
         this.play('knifeWalk', 0.16, false, true);
         return;
