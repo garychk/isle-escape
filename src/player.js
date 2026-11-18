@@ -7,6 +7,7 @@ import { colliders } from './flora.js';
 import { sfx } from './audio.js';
 import { burst } from './animals.js';
 import { instance } from './assets.js';
+import { inventory, ITEMS } from './inventory.js';
 
 const V = new THREE.Vector3();
 
@@ -269,7 +270,7 @@ export class Player {
     let spd = this.sprinting ? CFG.RUN : CFG.WALK;
     if (zone.inSwampWater && !zone.onBoard) spd = CFG.SWAMP_WALK;
     else if (zone.inWater) spd *= 0.62;
-    if (this.wep === 'knife') spd *= 1.12;
+    if (this.wep === 'knife') spd *= 0.33;   // 持刀谨慎潜行：≈0.8m/s，正好匹配 knife_walk 动画原生步速，脚不打滑、步态自然；timeScale≈1 不快放
     else if (this.wep === 'none') spd *= 1.15;   // 空手轻装，略快于持械
     if (this.aiming) spd *= 0.55;
     if (this.isSneaking) spd *= CFG.CROUCH_MULT;
@@ -376,6 +377,15 @@ export class Player {
     this.ui.updateAmmo(this);
   }
 
+  // 背包使用：快捷键 4/5 与面板点击共用入口；满血/空包不消耗物品
+  useBagItem(type) {
+    const r = inventory.use(type, this);
+    this.ui.toast(r.msg, !r.ok);
+    this.ui.updateAmmo(this);
+    this.ui.updateBag();
+    return r;
+  }
+
   updateInteract() {
     let near = null;
     for (const p of this.pickups) {
@@ -385,12 +395,12 @@ export class Player {
     const boatD = dist2(this.pos.x, this.pos.z, BOAT.x, BOAT.z);
     const campD = dist2(this.pos.x, this.pos.z, CAMPFIRE.x, CAMPFIRE.z);
     if (near) {
-      this.ui.prompt('E', near.type === 'ammo' ? '拾取弹药 (+30)' : '拾取急救包 (+40 生命)', () => {
+      const label = ITEMS[near.type].label;
+      this.ui.prompt('E', '拾取' + label + '（存入背包）', () => {
+        if (!inventory.add(near.type)) { this.ui.toast('背包已满 · ' + label + '最多 ' + ITEMS[near.type].max + ' 个', true); return; }
         near.taken = true; near.mesh.visible = false; sfx.pickup();
-        if (near.type === 'ammo') { this.reserve += 30; }
-        else { this.hp = Math.min(CFG.HP_MAX, this.hp + 40); sfx.heal(); }
-        this.ui.updateAmmo(this);
-        this.ui.toast(near.type === 'ammo' ? '已拾取弹药' : '已使用急救包');
+        this.ui.updateBag();
+        this.ui.toast(label + '已存入背包 · 按 ' + ITEMS[near.type].key + ' 或 B 打开背包使用');
       });
     } else if (campD < 3.2 && this.hp < CFG.HP_MAX) {
       this.ui.prompt('E', '在篝火旁休息 · 恢复全部生命', () => {

@@ -48,6 +48,7 @@ const rng = mulberry32(20261112);
 const UP = new THREE.Object3D();
 const YAX = new THREE.Vector3(0, 1, 0);
 const ZAX = new THREE.Vector3(0, 0, 1);
+const XAX = new THREE.Vector3(1, 0, 0);
 const _v = new THREE.Vector3();
 // —— 全局风场 ——
 // 注意：Three.js 的 uniform 必须是 { value: x }。旧版这里写成了 { time: t }，
@@ -244,6 +245,23 @@ function frondGeo() {
     const x = Math.max(0, p.getX(i));
     p.setY(i, p.getY(i) - x * x * 0.62);
     p.setZ(i, Math.sin(x * 2.7) * 0.05);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+// 羽状复叶（leaf_tree_b）：原点在【叶柄端】、沿 +X 伸出到叶尖。
+// UV 只取贴图上半部那组主导羽叶（柄在左、尖朝右），避开下半部那组反向羽叶——
+// 否则同一棵树上总有一半叶片"方向反了"，叶柄朝外悬在空中、像离心的断枝。
+function featherFrondGeo() {
+  const g = new THREE.PlaneGeometry(1, 0.92, 8, 1);
+  g.translate(0.5, 0, 0);                       // 原点移到左边缘 = 叶柄连接点
+  const uv = g.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setY(i, 0.53 + uv.getY(i) * 0.45); // 仅采上半组
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i);
+    // 沿法线 -Z 弯：实例摊平到水平后（rotX -90°，-Z→-Y）自然变成叶尖下垂
+    p.setZ(i, p.getZ(i) - x * x * 0.13);
   }
   g.computeVertexNormals();
   return g;
@@ -683,11 +701,13 @@ export function buildFlora(scene, quality = 1) {
     const branchGeo = new THREE.CylinderGeometry(0.07, 0.2, 1, 6);
     branchGeo.translate(0, 0.5, 0);
     const branches = new THREE.InstancedMesh(branchGeo, barkDark, pts.length * 3);
-    // 冠：真实大羽叶卡（leaf_tree_b —— 雨豆树式巨羽复叶）
-    const crownGeo = cardGeo(0.18, 3);
-    // 加密：每树 6 张围合 + 3 张盖顶（原 4+2），上限 9
-    const crowns = new THREE.InstancedMesh(crownGeo, leafMat(treeBTex(), { alphaTest: 0.4 }), pts.length * 9);
+    // 冠：真实羽状复叶卡（leaf_tree_b）。用 featherFrondGeo（原点=叶柄端、+X 指向叶尖），
+    // 让每片叶的【叶柄都聚在枝头/树干附近、羽叶向外展开】，不再随机朝向造成"方向反了"。
+    const crownGeo = featherFrondGeo();
+    // 每树 11~14 片放射羽叶，上限 14（原 6+3 居中乱向卡片）
+    const crowns = new THREE.InstancedMesh(crownGeo, leafMat(treeBTex(), { alphaTest: 0.4 }), pts.length * 14);
     const c = new THREE.Color();
+    const qy = new THREE.Quaternion(), qx = new THREE.Quaternion();
     let bi = 0, ci = 0;
     pts.forEach(([x, z], i) => {
       const s = 0.9 + rng() * 0.6;
@@ -711,30 +731,26 @@ export function buildFlora(scene, quality = 1) {
         UP.updateMatrix();
         branches.setMatrixAt(bi, UP.matrix); bi++;
       }
-      // 宽扁伞冠：中部 4 张大羽叶卡 + 顶部 2 张近水平
-      const crownY = y + th * 0.92;
-      for (let k = 0; k < 6; k++) {
-        const a = (k / 6) * 6.283 + rng() * 0.7;
-        const rad = (1.4 + rng() * 1.2) * s;
-        const cw = (5.6 + rng() * 2.4) * s;
-        UP.position.set(x + Math.cos(a) * rad, crownY + (rng() - 0.4) * 1.4 * s, z + Math.sin(a) * rad);
-        UP.scale.set(cw, cw * (0.62 + rng() * 0.16), cw);
-        UP.rotation.set((rng() - 0.5) * 0.6, rng() * 6.283, (rng() - 0.5) * 0.4);
+      // 伞冠：叶柄贴在树干顶端附近（贴枝头），羽叶向外放射、近水平略下垂
+      const crownY = y + th * 0.9;
+      const nf = 11 + Math.floor(rng() * 4);
+      for (let k = 0; k < nf && ci < pts.length * 14; k++) {
+        const a = (k / nf) * 6.283 + (rng() - 0.5) * 0.35;
+        const attachR = (0.7 + rng() * 0.6) * s;      // 叶柄离树干的距离（贴枝头）
+        const ax = x + Math.cos(a) * attachR, az = z + Math.sin(a) * attachR;
+        const ay = crownY - 0.35 * s + (rng() - 0.5) * 0.7 * s;
+        // 先把叶片从竖立的 XY 面摊到近水平（+X 仍朝外、-Z 弯变成叶尖下垂），
+        // 再绕 Y 转到方位角 a —— 叶柄留在枝头、叶尖沿 (cos a, sin a) 向外放射。
+        const tilt = -Math.PI / 2 + 0.12 + rng() * 0.26; // 近水平、略微摊开成伞
+        qx.setFromAxisAngle(XAX, tilt);
+        qy.setFromAxisAngle(YAX, -a);
+        UP.position.set(ax, ay, az);
+        UP.quaternion.copy(qy).multiply(qx);
+        const L = (5.0 + rng() * 2.6) * s;
+        UP.scale.set(L, L, L);
         UP.updateMatrix();
         crowns.setMatrixAt(ci, UP.matrix);
-        c.setHSL(0.26 + rng() * 0.04, 0.18 + rng() * 0.12, 0.72 + rng() * 0.16);
-        crowns.setColorAt(ci, c); ci++;
-      }
-      for (let k = 0; k < 3; k++) {
-        const a = (k / 3) * 6.283 + rng() * 0.9;
-        const rad = (1.6 + rng() * 2) * s;
-        const cw = (7 + rng() * 2.6) * s;
-        UP.position.set(x + Math.cos(a) * rad, crownY + (1.4 + rng() * 1.4) * s, z + Math.sin(a) * rad);
-        UP.scale.set(cw, cw, cw);
-        UP.rotation.set(-Math.PI / 2 + (rng() - 0.5) * 0.45, rng() * 6.283, (rng() - 0.5) * 0.3);
-        UP.updateMatrix();
-        crowns.setMatrixAt(ci, UP.matrix);
-        c.setHSL(0.25 + rng() * 0.05, 0.16 + rng() * 0.10, 0.6 + rng() * 0.14);
+        c.setHSL(0.26 + rng() * 0.04, 0.18 + rng() * 0.12, 0.70 + rng() * 0.16);
         crowns.setColorAt(ci, c); ci++;
       }
     });

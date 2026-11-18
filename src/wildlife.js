@@ -105,10 +105,15 @@ function combine(parts) {
 const TIME_U = { value: 0 };
 function wildlifeMaterial(o = {}) {
   const m = new THREE.MeshStandardMaterial({
-    vertexColors: true, roughness: 0.84, metalness: 0.02,
-    normalMap: SCALE_N, normalScale: new THREE.Vector2(0.30, 0.30),
-    // 树荫/背光下留一点自发光底色，避免整只动物糊成一条纯黑剪影
-    emissive: new THREE.Color(0x11180c), emissiveIntensity: 0.42,
+    // 鸟统一黑模剪影：不要顶点色/皮纹/自发光底色，天空背景下就是干净的黑鸟轮廓
+    vertexColors: !o.black,
+    color: o.black ? 0x0b0b0b : 0xffffff,
+    roughness: o.black ? 1.0 : 0.84,
+    metalness: o.black ? 0 : 0.02,
+    normalMap: o.black ? null : SCALE_N,
+    normalScale: new THREE.Vector2(0.30, 0.30),
+    // 树荫/背光下留一点自发光底色，避免整只动物糊成一条纯黑剪影（鸟不需要）
+    emissive: new THREE.Color(o.black ? 0x000000 : 0x11180c), emissiveIntensity: o.black ? 0 : 0.42,
     side: THREE.DoubleSide,
   });
   const flapA = o.flap ?? 0, waveA = o.wave ?? 0, flapSpeed = o.flapSpeed ?? 9;
@@ -138,7 +143,7 @@ function wildlifeMaterial(o = {}) {
       transformed.x += sin(aSeg * 8.0 - wph * 5.0) * aSeg * uWWave;
     `);
   };
-  m.customProgramCacheKey = () => 'wildlife-v1-' + flapA + '-' + waveA + '-' + flapSpeed;
+  m.customProgramCacheKey = () => 'wildlife-v1-' + flapA + '-' + waveA + '-' + flapSpeed + (o.black ? '-black' : '');
   return m;
 }
 
@@ -420,10 +425,10 @@ export function buildWildlife(scene) {
     meshes.push(mesh);
   }
 
-  // —— 鸟类：群鸟 / 猛禽 / 海鸟 / 停栖鸟共用一个几何与材质 ——
-  const BN = 152;
+  // —— 鸟类：群鸟 / 猛禽 / 海鸟 / 停栖鸟共用一个几何与黑模材质 ——
+  const BN = 88;
   const bgeo = combine(makeBirdParts());
-  const bmat = wildlifeMaterial({ flap: 0.095, flapSpeed: 12.0, wave: 0 });
+  const bmat = wildlifeMaterial({ flap: 0.095, flapSpeed: 12.0, wave: 0, black: true });
   const bmesh = new THREE.InstancedMesh(bgeo, bmat, BN);
   bmesh.name = 'wildlife:birds';
   bmesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -435,23 +440,12 @@ export function buildWildlife(scene) {
   bgeo.setAttribute('aRate', new THREE.InstancedBufferAttribute(bRate, 1));
   scene.add(bmesh); meshes.push(bmesh);
 
-  const BIRD_COLORS = {
-    flock: [0xb6bd9c, 0xa89a76, 0x8ba17b, 0xc4b18e],
-    raptor: [0x8a7358, 0x6b5945, 0x9a8060],
-    gull: [0xe4e2d5, 0xc9cfc6, 0xf0ece0],
-    perch: [0xa8b47e, 0xbaa077, 0x8ca06e],
-  };
   const addBird = (kind, cfg) => {
     const i = birds.length;
     if (i >= BN) return null;
     bPhase[i] = rng() * 6.283;
     bFlap[i] = kind === 'perch' ? 0 : (kind === 'raptor' ? 0.6 : 1);
     bRate[i] = kind === 'raptor' ? 0.34 : kind === 'gull' ? 0.62 : 1;
-    const pal = BIRD_COLORS[kind];
-    tmpColor.setHex(pal[(rng() * pal.length) | 0]);
-    // setColorAt 与顶点色相乘，向白色靠拢以保留层次又不压暗
-    tmpColor.lerp(new THREE.Color(0xffffff), 0.55);
-    bmesh.setColorAt(i, tmpColor);
     const b = { kind, i, ...cfg, phase: bPhase[i], visTh: rng() * 0.95 };
     birds.push(b);
     return b;
@@ -471,7 +465,7 @@ export function buildWildlife(scene) {
       squash: 0.70 + rng() * 0.42,
     };
     flocks.push(g);
-    const n = 10 + ((rng() * 5) | 0);
+    const n = 5 + ((rng() * 3) | 0);
     for (let k = 0; k < n; k++) {
       addBird('flock', {
         flock: g, off: (k / n) * 6.283 + (rng() - 0.5) * 0.5,
@@ -480,9 +474,9 @@ export function buildWildlife(scene) {
       });
     }
   }
-  // 高空猛禽：慢速大半径盘旋，其中 2 只固定盘在出生点上空
-  for (let k = 0; k < 6; k++) {
-    const n = k < 2;
+  // 高空猛禽：慢速大半径盘旋，其中 1 只固定盘在出生点上空
+  for (let k = 0; k < 3; k++) {
+    const n = k < 1;
     addBird('raptor', {
       cx: n ? (rng() - 0.5) * 40 : (rng() - 0.5) * 220,
       cz: n ? 195 + (rng() - 0.5) * 40 : (rng() - 0.5) * 220,
@@ -493,7 +487,7 @@ export function buildWildlife(scene) {
   }
   // 海鸟：绕着几处海岸点滑翔（不是绕整岛一个大圆，否则永远不在视野里）
   const GULL_SPOTS = [[0, 236], [-95, 185], [100, 180], [0, -232], [-185, 90], [180, 60]];
-  for (let k = 0; k < 16; k++) {
+  for (let k = 0; k < 8; k++) {
     const s = GULL_SPOTS[k % GULL_SPOTS.length];
     addBird('gull', {
       cx: s[0] + (rng() - 0.5) * 26, cz: s[1] + (rng() - 0.5) * 26,
@@ -504,7 +498,7 @@ export function buildWildlife(scene) {
   }
   // 停栖鸟：从树干碰撞体里挑大树，挂在 4–8m 高的枝杈上；玩家靠近会惊飞
   const trees = colliders.filter(c => c.r > 1.35);
-  for (let k = 0; k < 20 && trees.length; k++) {
+  for (let k = 0; k < 10 && trees.length; k++) {
     const c = trees[(rng() * trees.length) | 0];
     const h = baseHeight(c.x, c.z);
     if (h < 1 || h > 28) continue;
@@ -514,8 +508,6 @@ export function buildWildlife(scene) {
       scale: 1.20 + rng() * 0.50, flyT: 0, flyAng: 0,
     });
   }
-  if (bmesh.instanceColor) bmesh.instanceColor.needsUpdate = true;
-
   let calls = 0, lastVisible = 0;
   const V = new THREE.Vector3();
 
@@ -571,14 +563,18 @@ export function buildWildlife(scene) {
     // —— 鸟类 ——
     let visCount = 0;
     for (const b of birds) {
-      // 夜间绝大多数鸟归巢；雨天减少约一半并压低飞行高度
+      // 夜间飞鸟归巢；下雨天飞鸟躲雨不出现，停栖鸟仍留在枝上
       let show = b.kind === 'perch' ? day > 0.30 : day > b.visTh * 0.92;
-      if (rain > 0.35) show = show && (b.visTh < 1 - rain * 0.55);
+      if (b.kind !== 'perch' && rain > 0.12) {
+        // 随雨势渐隐：小雨零星、中雨大半归巢、大雨天空清空
+        show = show && b.visTh > (rain - 0.12) * 1.6;
+      }
       if (!show) { hide(bmesh, b.i); continue; }
       let x, y, z, yaw, roll = 0;
       if (b.kind === 'perch') {
         const d = Math.hypot(b.px - px, b.pz - pz);
-        if (d < 8.5 && b.flyT <= 0) { b.flyT = 9.0; b.flyAng = rng() * 6.283; bFlap[b.i] = 1; bgeo.attributes.aFlap.needsUpdate = true; }
+        // 雨天不惊飞：停栖鸟缩在枝上躲雨，天空保持无飞鸟
+        if (d < 8.5 && b.flyT <= 0 && rain < 0.35) { b.flyT = 9.0; b.flyAng = rng() * 6.283; bFlap[b.i] = 1; bgeo.attributes.aFlap.needsUpdate = true; }
         if (b.flyT > 0) {
           b.flyT -= dt;
           const e = 9.0 - b.flyT;

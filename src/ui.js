@@ -2,6 +2,7 @@
 import { BOAT, ZONES } from './config.js';
 import { clamp, fmtTime } from './util.js';
 import { sfx, setVolume } from './audio.js';
+import { inventory, ITEMS } from './inventory.js';
 
 const $ = id => document.getElementById(id);
 
@@ -43,9 +44,11 @@ export class UI {
 
     this.buildTape();
     this.bindMenus();
+    this.bindBag();
     this.bindSettings();
     this.bindTouch();
     this.loadPrefs();
+    this.updateBag();
 
     // 罗盘标记缓存
     this.mark = $('objmark'); this.markDist = $('objdist');
@@ -105,6 +108,46 @@ export class UI {
       $(b).onclick = () => { sfx.uiclick(); $('panel').hidden = false; };
     }
     $('panel-close').onclick = () => { sfx.uiclick(); $('panel').hidden = true; };
+  }
+
+  // ---------- 背包 ----------
+  bindBag() {
+    this.bagOpen = false;
+    for (const btn of document.querySelectorAll('[data-bag-use]')) {
+      btn.onclick = () => {
+        const p = this.game.player;
+        if (p) { p.useBagItem(btn.dataset.bagUse); sfx.uiclick(); this.updateBag(); }
+      };
+    }
+    const close = $('bag-close');
+    if (close) close.onclick = () => { sfx.uiclick(); this.game.closeBag(); };
+  }
+  showBag(on) {
+    const el = $('bag-panel');
+    if (!el) return;
+    this.bagOpen = !!on;
+    el.hidden = !on;
+    if (on) { $('panel').hidden = true; this.updateBag(); }
+  }
+  updateBag() {
+    const med = inventory.count('medkit'), amm = inventory.count('ammo');
+    const hud = $('baghud');
+    if (hud) {
+      hud.innerHTML = `<span class="bh-i ${med ? 'has' : ''}"><kbd>4</kbd>急救 <b>×${med}</b></span>`
+        + `<span class="bh-i ${amm ? 'has' : ''}"><kbd>5</kbd>弹药 <b>×${amm}</b></span>`
+        + `<span class="bh-key"><kbd>B</kbd>背包</span>`;
+    }
+    const p = this.game.player;
+    for (const btn of document.querySelectorAll('[data-bag-use]')) {
+      const type = btn.dataset.bagUse;
+      const n = inventory.count(type);
+      const num = document.querySelector('.bag-item.' + type + ' .bi-num');
+      if (num) num.textContent = '×' + n;
+      const it = ITEMS[type];
+      const full = type === 'medkit' && p && p.hp >= CFG_HP;
+      btn.disabled = n <= 0 || !!full;
+      btn.title = n <= 0 ? '背包里没有' : full ? '生命已满' : it.desc;
+    }
   }
 
   bindSettings() {
@@ -202,6 +245,8 @@ export class UI {
         b.addEventListener('pointerdown', () => { g.player.keys['Space'] = true; setTimeout(() => g.player.keys['Space'] = false, 120); });
       } else if (k === 'interact') {
         b.addEventListener('pointerdown', () => { if (this.promptCb) this.promptCb(); });
+      } else if (k === 'bag') {
+        b.addEventListener('pointerdown', () => { if (!this.game.openBag()) this.game.closeBag(); });
       }
     }
   }

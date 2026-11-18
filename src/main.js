@@ -17,6 +17,7 @@ import { loadWaterTextures, bindWaterEnv, waterState, setWavesEnabled, setWaterF
 import { resume, startAmbient, startBGM, setCombat, setCaveAmbience, setRain, setWaterNear, waterAmbState, thunder, sfx, bgmState, sfxState, engineState, startWildlifeAudio, setWildlifeContext, wildlifeAudioState, debugWildlifeCall } from './audio.js';
 import { buildWildlife, wildlifeState, wildlifeCallPoint } from './wildlife.js';
 import { clamp } from './util.js';
+import { inventory } from './inventory.js';
 
 const canvas = document.getElementById('view');
 function lockPointer() {
@@ -157,6 +158,20 @@ const game = {
     ui.showMenu('menu-paused');
     document.exitPointerLock && document.exitPointerLock();
   },
+  // 背包：暂停游戏 + 释放指针锁，面板里可点击使用；关闭后恢复
+  openBag() {
+    if (state !== 'playing' || !ui || (player && (player.dead || player.win))) return false;
+    state = 'paused';
+    ui.showBag(true);
+    document.exitPointerLock && document.exitPointerLock();
+    return true;
+  },
+  closeBag() {
+    if (!ui || !ui.bagOpen) return false;
+    ui.showBag(false);
+    if (state === 'paused') { state = 'playing'; ui.showHUD(); lockPointer(); }
+    return true;
+  },
   resume() {
     if (state !== 'paused') return;
     state = 'playing';
@@ -211,6 +226,11 @@ window.__qa = {
   sfx: sfxState,
   water: waterState,
   foliage: foliageWindState,
+  bag: () => inventory.snapshot(),
+  giveBag: (type, n = 1) => { for (let i = 0; i < n; i++) inventory.add(type); ui && ui.updateBag(); return inventory.snapshot(); },
+  useBag: (type) => player.useBagItem(type),
+  openBag: () => game.openBag(),
+  closeBag: () => game.closeBag(),
   // QA：同机位实时开关风与浪（树叶静止 + 浪归零），供像素差对照
   setFx(v) {
     fxOn.wind = fxOn.waves = !!v;
@@ -237,13 +257,22 @@ window.__qa = {
 // —— 输入 ——
 addEventListener('keydown', e => {
   if (!player) return;
-  // 设置面板打开时，ESC 优先关闭面板，再走暂停/恢复逻辑
+  // 背包面板打开时，ESC 优先关闭背包并恢复游戏
   if (e.code === 'Escape') {
+    const bag = document.getElementById('bag-panel');
+    if (bag && !bag.hidden) { game.closeBag(); return; }
     const panel = document.getElementById('panel');
     if (panel && !panel.hidden) { panel.hidden = true; return; }
   }
   player.keys[e.code] = true;
-  if (state !== 'playing') { if (e.code === 'Escape' && state === 'paused') game.resume(); return; }
+  if (state !== 'playing') {
+    if (e.code === 'Escape' && state === 'paused') game.resume();
+    return;
+  }
+  // 背包 / 补给快捷键（1/2/3 已被武器占用，用 4/5）
+  if (e.code === 'KeyB') { sfx.uiclick(); game.openBag(); return; }
+  if (e.code === 'Digit4') { player.useBagItem('medkit'); return; }
+  if (e.code === 'Digit5') { player.useBagItem('ammo'); return; }
   if (e.code === 'KeyQ') {
     const w = player.cycleWep();
     ui && ui.toast(w === 'none' ? '已收起武器 · 空手' : w === 'knife' ? '已拔刀' : '已举枪');

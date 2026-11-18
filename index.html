@@ -207,6 +207,27 @@ kbd { display: inline-block; font: 500 10px/1 var(--f-m); color: var(--bone); bo
 .toggle i::after { content: ''; position: absolute; left: 3px; top: 3px; width: 16px; height: 14px; background: var(--bone-dim); transition: transform .12s, background .12s; }
 .toggle[aria-pressed="true"] i { border-color: var(--moss); } .toggle[aria-pressed="true"] i::after { transform: translateX(20px); background: var(--moss); }
 .keys { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; }
+
+/* bag: HUD quick bar + panel */
+.h-bag { position: absolute; right: max(var(--gr), 4vw); bottom: calc(clamp(96px, 15vh, 150px) + var(--sab)); display: flex; gap: 8px; align-items: center; pointer-events: none; }
+.h-bag .bh-i, .h-bag .bh-key { display: inline-flex; align-items: center; gap: 5px; font: 600 11px/1 var(--f-l); letter-spacing: .08em; color: rgba(230,226,212,.42); padding: 5px 7px; background: rgba(10,13,10,.42); border: 1px solid rgba(230,226,212,.12); }
+.h-bag .bh-i.has, .h-bag .bh-key { color: var(--bone); border-color: rgba(230,226,212,.32); }
+.h-bag .bh-i.has b { color: var(--amber); }
+.h-bag kbd { font: 700 10px/1 var(--f-m); color: var(--ink); background: var(--bone); padding: 2px 4px; }
+.h-bag .bh-key kbd { background: var(--moss); }
+
+.bag-item { display: flex; align-items: center; gap: 14px; padding: 16px 0; border-bottom: 1px solid var(--line); pointer-events: auto; }
+.bag-item .bi-ico { flex: none; width: 46px; height: 46px; display: grid; place-items: center; font: 900 22px/1 var(--f-m); color: var(--ink); background: var(--moss); }
+.bag-item.ammo .bi-ico { background: var(--amber); }
+.bag-item .bi-txt { flex: 1; min-width: 0; }
+.bag-item .bi-name { font: 700 15px/1.3 var(--f-l); letter-spacing: .1em; color: var(--bone); }
+.bag-item .bi-name b { color: var(--amber); margin-left: 6px; }
+.bag-item .bi-desc { font: 400 12px/1.5 var(--f-m); color: var(--steel); margin-top: 3px; }
+.bag-item .bi-use { flex: none; font: 700 12px/1 var(--f-l); letter-spacing: .12em; color: var(--bone); background: rgba(10,13,10,.55); border: 1px solid rgba(230,226,212,.42); padding: 9px 13px; cursor: pointer; }
+.bag-item .bi-use:hover:not(:disabled) { background: var(--moss); color: var(--ink); border-color: var(--moss); }
+.bag-item .bi-use:disabled { opacity: .35; cursor: not-allowed; }
+.bag-tip { font: 400 11px/1.7 var(--f-m); color: var(--steel); letter-spacing: .03em; padding-top: 14px; }
+.bag-tip kbd { font: 700 10px/1 var(--f-m); color: var(--ink); background: var(--bone); padding: 2px 5px; margin: 0 2px; }
 .keys > div { display: flex; justify-content: space-between; align-items: baseline; padding: 7px 0; border-bottom: 1px solid rgba(230,226,212,.08); }
 .keys dt { font: 500 12px/1.3 var(--f-l); letter-spacing: .12em; color: var(--steel); }
 .keys dd { margin: 0; }
@@ -277,6 +298,7 @@ kbd { display: inline-block; font: 500 10px/1 var(--f-m); color: var(--bone); bo
         <div class="h-wep" id="weplab">步枪 <em>RIFLE</em></div>
         <div class="h-hint" id="ammohint">子弹耗尽 · 按 Q 拔刀</div>
       </div>
+      <div class="h-bag" id="baghud"></div>
       <div class="h-cross" id="cross"><i class="c-t"></i><i class="c-b"></i><i class="c-l"></i><i class="c-r"></i><i class="c-dot"></i></div>
       <div class="h-hit" id="hitmark"><i></i><i></i><i></i><i></i></div>
       <div class="h-dmg" id="dmgflash"></div>
@@ -389,10 +411,31 @@ kbd { display: inline-block; font: 500 10px/1 var(--f-m); color: var(--bone); bo
           <div><dt>切刀 / 收枪</dt><dd><kbd>Q</kbd></dd></div>
           <div><dt>步枪 / 军刀</dt><dd><kbd>1</kbd><kbd>2</kbd></dd></div>
           <div><dt>换弹</dt><dd><kbd>R</kbd></dd></div>
+          <div><dt>用急救包 / 弹药包</dt><dd><kbd>4</kbd><kbd>5</kbd></dd></div>
+          <div><dt>背包</dt><dd><kbd>B</kbd></dd></div>
           <div><dt>枪灯</dt><dd><kbd>F</kbd></dd></div>
           <div><dt>拾取 / 上筏</dt><dd><kbd>E</kbd></dd></div>
           <div><dt>暂停</dt><dd><kbd>ESC</kbd></dd></div>
         </div>
+      </div>
+    </div>
+
+    <!-- bag panel -->
+    <div class="panel" id="bag-panel" hidden style="pointer-events:auto">
+      <div class="panel-h"><div class="m-k">背包</div><button class="panel-x" id="bag-close">✕ ESC</button></div>
+      <div class="panel-b">
+        <h3>随身补给</h3>
+        <div class="bag-item medkit">
+          <div class="bi-ico">✚</div>
+          <div class="bi-txt"><div class="bi-name">急救包 <b class="bi-num">×0</b></div><div class="bi-desc">恢复 40 生命并解毒 · 满血时保留在包里</div></div>
+          <button class="bi-use" data-bag-use="medkit" disabled>使用</button>
+        </div>
+        <div class="bag-item ammo">
+          <div class="bi-ico">▤</div>
+          <div class="bi-txt"><div class="bi-name">弹药包 <b class="bi-num">×0</b></div><div class="bi-desc">步枪备用弹药 +30</div></div>
+          <button class="bi-use" data-bag-use="ammo" disabled>使用</button>
+        </div>
+        <div class="bag-tip">拾取的补给先存入背包，不会自动使用。<br>游戏中按 <kbd>4</kbd> 急救包 / <kbd>5</kbd> 弹药包 快速使用，按 <kbd>B</kbd> 打开或关闭背包。</div>
       </div>
     </div>
 
@@ -405,6 +448,7 @@ kbd { display: inline-block; font: 500 10px/1 var(--f-m); color: var(--bone); bo
         <button class="t-btn" data-k="reload">换弹</button>
         <button class="t-btn" data-k="jump">跳</button>
         <button class="t-btn" data-k="interact">E</button>
+        <button class="t-btn" data-k="bag">背包</button>
         <button class="t-btn fire" data-k="fire">射击</button>
       </div>
     </div>
