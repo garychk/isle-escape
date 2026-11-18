@@ -1,6 +1,6 @@
 // 结构物：索桥 / 沼泽木板路 / 山洞穹顶 / 救生筏 / 遇难残骸 / 林中木屋
 import * as THREE from 'three';
-import { CFG, RAFT, BOAT, CABIN, SWAMP, MARBLE } from './config.js';
+import { CFG, RAFT, BOAT, CABIN, SWAMP } from './config.js';
 import { mulberry32 } from './util.js';
 import { baseHeight, surfaceRects, surfaceRamps } from './terrain.js';
 import { colliders } from './flora.js';
@@ -28,56 +28,7 @@ export function buildStructures(scene) {
   buildWreck(g);
   buildCabin(g);
   buildLandmarks(g);
-  buildMarbleMountain(g);
   return g;
-}
-
-// ================= 东岭大理石山（Carrara 采石场航拍扫描，2026-11-18） =================
-// GLB 原点=底面中心（24×34m 底座、10.6m 高差，四边带封闭裙边）。
-// 缩放 ×4.2 → 基座 ~143×101m、崖高 ~44.5m，底部下埋 4m 让裙边盖住与地形的接缝；
-// 采样 footprint 内地形最低点落位，地形更高处自然"穿进"山体（岩层从地里冒出）。
-function buildMarbleMountain(g) {
-  const inst = instance('marble');
-  if (!inst) { console.warn('[structures] marble.glb 缺失，跳过大理石山'); return; }
-  const w = inst.wrap;
-  const s = MARBLE.s;
-  // footprint 半宽（旋转前模型 x 24 / y 34，rot=-90° 后沿世界 x 是 34×s）
-  const hx = 17.16 * s, hz = 11.98 * s;
-  // 采样 footprint 覆盖的地形最低点（网格 8×6 采样足够）
-  let hMin = Infinity;
-  for (let i = 0; i <= 8; i++) {
-    for (let j = 0; j <= 6; j++) {
-      const x = MARBLE.x - hx + (i / 8) * hx * 2;
-      const z = MARBLE.z - hz + (j / 6) * hz * 2;
-      hMin = Math.min(hMin, baseHeight(x, z));
-    }
-  }
-  w.position.set(MARBLE.x, hMin - MARBLE.sink, MARBLE.z);
-  w.scale.setScalar(s);
-  w.rotation.y = MARBLE.rot;
-  // 山体太大不进方向光阴影相机范围，强开会拉假阴影；自阴影仍保留在材质上
-  w.traverse(o => {
-    if (!o.isMesh) return;
-    o.castShadow = false;
-    o.receiveShadow = true;
-    // 提亮大理石质感：贴图偏灰，压 roughness、加环境反射，避免背光面死黑
-    const mats = Array.isArray(o.material) ? o.material : [o.material];
-    for (const m of mats) {
-      if (!m) continue;
-      m.color = new THREE.Color(0xffffff);
-      m.roughness = Math.min(m.roughness ?? 1, 0.88);
-      m.envMapIntensity = 1.45;
-      m.needsUpdate = true;
-    }
-  });
-  g.add(w);
-  // 碰撞：山脚一圈圆盖住 footprint 外缘（崖壁立陡，防止玩家走进模型穿模）
-  // 8 圆沿 footprint 边界布置，半径盖到山脚内 6m
-  const ringR = Math.max(hx, hz) * 0.72;
-  for (let k = 0; k < 8; k++) {
-    const a = (k / 8) * 6.283;
-    colliders.push({ x: MARBLE.x + Math.cos(a) * ringR * 0.62, z: MARBLE.z + Math.sin(a) * ringR * 0.62, r: ringR * 0.52 });
-  }
 }
 
 // ================= 场景地标：让沿途不再是一条空走廊 =================

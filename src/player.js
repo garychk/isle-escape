@@ -1,6 +1,6 @@
 // 玩家：第一人称控制 / 步枪 + 军刀 / 生命体力 / 拾取 / 受击与中毒
 import * as THREE from 'three';
-import { CFG, RAFT, BOAT, PICKUPS, POND, SWAMP, CAMPFIRE } from './config.js';
+import { CFG, SPAWN, RAFT, BOAT, PICKUPS, POND, SWAMP, CAMPFIRE } from './config.js';
 import { clamp, dist2, pushOutCircles } from './util.js';
 import { groundHeight, zoneState } from './terrain.js';
 import { colliders } from './flora.js';
@@ -13,7 +13,7 @@ const V = new THREE.Vector3();
 export class Player {
   constructor(camera, scene, beasts, ui, envTex) {
     this.cam = camera; this.scene = scene; this.beasts = beasts; this.ui = ui;
-    this.pos = new THREE.Vector3(0, 3, 205);
+    this.pos = new THREE.Vector3(SPAWN.x, 3, SPAWN.z);
     this.velY = 0; this.yaw = 0; this.pitch = -0.02; // 朝北面向密林
     this.onGround = true;
     this.hp = CFG.HP_MAX; this.st = CFG.ST_MAX;
@@ -317,7 +317,8 @@ export class Player {
     // 跌落谷底：拽回桥头
     if (this.pos.y < -8.5) {
       this.damage(26, '坠入断魂谷');
-      this.pos.set(0, groundHeight(0, 22) + 1.2, 22);
+      // 拽回桥头（2026-11-18 随索桥端点 ×1.25：旧 z=22 现在落在峡谷里）
+      this.pos.set(0, groundHeight(0, 27.5) + 1.2, 27.5);
       this.velY = 0;
     }
     // —— 环境伤害 ——

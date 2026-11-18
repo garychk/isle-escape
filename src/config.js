@@ -37,7 +37,7 @@ export const CAVE_OUT = { x: 0, z: -215 };   // 洞口（北）
 export const BRIDGE = { x: 0, z0: 17.5, z1: -32.5 }; // 索桥（跨峡谷）
 export const CABIN = { x: -42.5, z: 19.375, padY: 5.3 }; // 林中木屋（地形压平到 padY）
 export const CAMPFIRE = { x: 87.5, z: 37.5 }; // 沼泽边废弃营地篝火（靠近回血补给点）
-export const MARBLE = { x: 175, z: -100, s: 4.8, rot: -Math.PI / 2, sink: 9 }; // 东岭大理石山（carrara 采石场扫描）
+export const MARBLE = { x: 175, z: -100 }; // 东岭山（JS 程序化生成，terrain.js baseHeight；旧 marble.glb 采石场已移除）
 
 // 引导小径折线（林间开路 + 泥土色）
 export const TRAIL = [

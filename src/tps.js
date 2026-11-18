@@ -27,9 +27,11 @@ export class TPS {
     this.char.setWeapon(player.wep);
 
     // 载具停放点（沿主线放，方便遇到）
+    // 2026-11-18 随海岛平面 ×1.25 同步（旧值 -103,82 / -14,196 会沉进放大后的水塘、偏离新出生点）
+    // jeep 锚在水塘西南侧小径旁，m151 锚在出生点前方小径起点
     this.vehicles = [
-      new Vehicle('jeep', scene, -103, 82, 1.15),
-      new Vehicle('m151', scene, -14, 196, 2.7),
+      new Vehicle('jeep', scene, -128.75, 102.5, 1.15),
+      new Vehicle('m151', scene, -17.5, 245, 2.7),
     ];
     player.tps = this;
     player.vehicles = this.vehicles;

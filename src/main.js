@@ -224,6 +224,7 @@ window.__qa = {
   waterAmb: waterAmbState,
   reef: reefState,
   wildlife: wildlifeState,
+  wild: () => wildlife,   // QA：暴露 manager 引用，供动物摆拍特写（无副作用）
   wildlifeAudio: wildlifeAudioState,
   wildlifeCall: debugWildlifeCall,
   waterTest: (lv) => setWaterNear(lv),
@@ -319,7 +320,7 @@ function loop() {
   if (state === 'playing' && player) {
     playTime += dt;
     // 索桥摆动
-    const onBridge = Math.abs(player.pos.x) < 4 && player.pos.z < 18 && player.pos.z > -30;
+    const onBridge = Math.abs(player.pos.x) < 4 && player.pos.z < 22.5 && player.pos.z > -37.5;
     const target = onBridge ? 2.6 : 1;
     bridgeImpulse += ((bridgeImpulse < target ? 1 : -1) * 0.02);
     bridgeImpulse = clamp(bridgeImpulse, 0, target);

@@ -185,7 +185,7 @@ function placeOK(x, z, opts = {}) {
   if (dist2(x, z, CABIN.x, CABIN.z) < 21.25) return false; // 林中木屋空地不长树
   if (Math.abs(z + 7.5) < 26.25 && Math.abs(x) < 17.5) return false; // 断魂谷谷底
   if (Math.abs(x - SWAMP.x) < 6.25 && z < 122.5 && z > 10) return false; // 沼泽木板路带
-  if (Math.abs(x - 175) < 82 && Math.abs(z + 100) < 58) return false;  // 东岭大理石山 footprint
+  // 东岭山改为 JS 地形山：不再有矩形 footprint 排除，由 maxH(46m)+坡度过滤自然形成「山脚有树、山顶裸岩」
   const e = 2;
   const slope = Math.hypot(baseHeight(x + e, z) - baseHeight(x - e, z), baseHeight(x, z + e) - baseHeight(x, z - e)) / (2 * e);
   if (slope > 0.85) return false;
@@ -370,7 +370,8 @@ export function buildFlora(scene, quality = 1) {
     const branch = new THREE.InstancedMesh(branchGeo, barkMat, pts.length * 3);
     // 树冠叶簇卡片
     const crownGeo = cardGeo(0.2, 4);
-    const crown = new THREE.InstancedMesh(crownGeo, leafMat(canopyA, { alphaTest: 0.45 }), pts.length * 10);
+    // 加密冠层：每树 9 张围合 + 5 张冠顶盖天（原 7+3），上限同步到 14
+    const crown = new THREE.InstancedMesh(crownGeo, leafMat(canopyA, { alphaTest: 0.45 }), pts.length * 14);
     const c = new THREE.Color();
     let bi = 0, ci = 0, br = 0;
     pts.forEach(([x, z], i) => {
@@ -412,10 +413,10 @@ export function buildFlora(scene, quality = 1) {
       }
       // 树冠：多张卡片围成不规则冠层
       const crownY = y + th * 0.86;
-      for (let k = 0; k < 7; k++) {
-        const a = (k / 7) * 6.283 + rng() * 0.8;
-        const rad = (k < 4 ? 1.9 : 3.2) * s * (0.8 + rng() * 0.5);
-        const cw = (6.5 + rng() * 3.5) * s;
+      for (let k = 0; k < 9; k++) {
+        const a = (k / 9) * 6.283 + rng() * 0.6;
+        const rad = (k < 5 ? 1.9 : 3.4) * s * (0.8 + rng() * 0.5);
+        const cw = (7.2 + rng() * 3.8) * s;
         UP.position.set(x + Math.cos(a) * rad, crownY + (rng() - 0.3) * 2.2 * s, z + Math.sin(a) * rad);
         UP.scale.set(cw, cw * (0.62 + rng() * 0.22), cw);
         UP.rotation.set((rng() - 0.5) * 0.7, rng() * 6.283, (rng() - 0.5) * 0.5);
@@ -425,10 +426,10 @@ export function buildFlora(scene, quality = 1) {
         crown.setColorAt(ci, c); ci++;
       }
       // 冠顶：近水平的大叶片，把天空遮起来（雨林封闭冠层）
-      for (let k = 0; k < 3; k++) {
-        const a = rng() * 6.283;
-        const rad = (2.6 + rng() * 4.5) * s;
-        const cw = (11 + rng() * 6) * s;
+      for (let k = 0; k < 5; k++) {
+        const a = (k / 5) * 6.283 + rng() * 0.9;
+        const rad = (1.8 + rng() * 5.2) * s;
+        const cw = (12 + rng() * 7) * s;
         UP.position.set(x + Math.cos(a) * rad, crownY + (2.2 + rng() * 3.4) * s, z + Math.sin(a) * rad);
         UP.scale.set(cw, cw, cw);
         UP.rotation.set(-Math.PI / 2 + (rng() - 0.5) * 0.5, rng() * 6.283, (rng() - 0.5) * 0.4);
@@ -458,7 +459,8 @@ export function buildFlora(scene, quality = 1) {
     segGeo.translate(0, 0.5, 0);
     const segs = new THREE.InstancedMesh(segGeo, new THREE.MeshStandardMaterial({ map: palmBark, normalMap: barkN, normalScale: new THREE.Vector2(0.6, 0.6), color: 0xbdb096, roughness: 0.96 }), all.length * SEG);
     const fg = frondGeo();
-    const fronds = new THREE.InstancedMesh(fg, leafMat(palmT, { alphaTest: 0.3 }), all.length * 11);
+    // 加密：每树 12~15 片羽叶（原 9~11），上限 16
+    const fronds = new THREE.InstancedMesh(fg, leafMat(palmT, { alphaTest: 0.3 }), all.length * 16);
     const c = new THREE.Color();
     let si = 0, fi = 0;
     const qy = new THREE.Quaternion(), qz = new THREE.Quaternion();
@@ -477,7 +479,10 @@ export function buildFlora(scene, quality = 1) {
         const y0 = y + H * t0, y1 = y + H * t1;
         const dir = new THREE.Vector3(x1 - x0, y1 - y0, z1 - z0);
         const len = dir.length(); dir.normalize();
-        UP.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+        // 段几何体已 translate(0,0.5,0)，原点在【段底】而非中点；
+        // 必须把段底放到曲线起点 (x0,y0,z0)。若放在中点会整根抬高半段(~0.6~1.2m)，
+        // 底部平切口悬在空中——这就是"树吊在空中"的根因。
+        UP.position.set(x0, y0, z0);
         UP.quaternion.setFromUnitVectors(YAX, dir);
         UP.scale.set(s * (1 - t0 * 0.35), len * 1.06, s * (1 - t0 * 0.35));
         UP.updateMatrix();
@@ -486,10 +491,10 @@ export function buildFlora(scene, quality = 1) {
       }
       colliders.push({ x, z, r: 0.4 * s, type: "palm" });
       // 叶冠
-      const nf = 9 + Math.floor(rng() * 3);
+      const nf = 12 + Math.floor(rng() * 4);
       for (let k = 0; k < nf; k++) {
         const yaw = (k / nf) * 6.283 + rng() * 0.3;
-        const droop = 0.15 + rng() * 0.75;
+        const droop = 0.12 + rng() * 0.7;
         qy.setFromAxisAngle(YAX, yaw);
         qz.setFromAxisAngle(ZAX, -droop);
         UP.position.set(px, py - 0.05, pz);
@@ -522,7 +527,8 @@ export function buildFlora(scene, quality = 1) {
     });
     const segs = new THREE.InstancedMesh(segGeo, trunkMat, pts.length * SEG);
     const fg = frondGeo();
-    const fronds = new THREE.InstancedMesh(fg, leafMat(palmT, { alphaTest: 0.3 }), pts.length * 15);
+    // 加密：每树 15~19 片长垂羽叶（原 12~15），上限 20
+    const fronds = new THREE.InstancedMesh(fg, leafMat(palmT, { alphaTest: 0.3 }), pts.length * 20);
     const nuts = new THREE.InstancedMesh(
       new THREE.SphereGeometry(0.16, 8, 6),
       new THREE.MeshStandardMaterial({ color: 0x6d5232, roughness: 0.9 }), pts.length * 4);
@@ -543,7 +549,8 @@ export function buildFlora(scene, quality = 1) {
         const y0 = y + H * t0, y1 = y + H * t1;
         const dir = new THREE.Vector3(x1 - x0, y1 - y0, z1 - z0);
         const len = dir.length(); dir.normalize();
-        UP.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+        // 段底对齐曲线起点，避免整体抬高导致底部悬空（见棕榈段注释）
+        UP.position.set(x0, y0, z0);
         UP.quaternion.setFromUnitVectors(YAX, dir);
         UP.scale.set(s * (1 - t0 * 0.3), len * 1.06, s * (1 - t0 * 0.3));
         UP.updateMatrix();
@@ -551,10 +558,10 @@ export function buildFlora(scene, quality = 1) {
       }
       colliders.push({ x, z, r: 0.38 * s, type: "coconut" });
       // 长垂羽冠：片数多、下垂明显
-      const nf = 12 + Math.floor(rng() * 4);
-      for (let k = 0; k < nf && fi < pts.length * 15; k++) {
+      const nf = 15 + Math.floor(rng() * 5);
+      for (let k = 0; k < nf && fi < pts.length * 20; k++) {
         const yaw = (k / nf) * 6.283 + rng() * 0.25;
-        const droop = 0.5 + rng() * 0.6;
+        const droop = 0.45 + rng() * 0.6;
         qy.setFromAxisAngle(YAX, yaw);
         qz.setFromAxisAngle(ZAX, -droop);
         UP.position.set(x + Math.cos(la) * bendAmt, y + H - 0.05, z + Math.sin(la) * bendAmt);
@@ -608,7 +615,8 @@ export function buildFlora(scene, quality = 1) {
     const branches = new THREE.InstancedMesh(branchGeo, trunkMat, pts.length * 4);
     // 冠：真实阔叶卡（leaf_tree_a，椭圆单片叶 —— 橡胶叶形态）
     const crownGeo = cardGeo(0.14, 3);
-    const crowns = new THREE.InstancedMesh(crownGeo, leafMat(treeATex(), { alphaTest: 0.4 }), pts.length * 10);
+    // 加密：每树 10 张围合 + 3 张盖顶（原 8+2），上限 13
+    const crowns = new THREE.InstancedMesh(crownGeo, leafMat(treeATex(), { alphaTest: 0.4 }), pts.length * 13);
     const c = new THREE.Color();
     let bi = 0, ci = 0;
     pts.forEach(([x, z], i) => {
@@ -636,10 +644,10 @@ export function buildFlora(scene, quality = 1) {
       }
       // 卵圆冠：分两层围合 + 盖顶
       const crownY = y + th * 0.86;
-      for (let k = 0; k < 8; k++) {
-        const a = (k / 8) * 6.283 + rng() * 0.7;
-        const rad = (0.9 + (k % 3) * 0.7) * s * (0.8 + rng() * 0.4);
-        const cw = (3.2 + rng() * 1.8) * s;
+      for (let k = 0; k < 10; k++) {
+        const a = (k / 10) * 6.283 + rng() * 0.6;
+        const rad = (1.0 + (k % 3) * 0.7) * s * (0.8 + rng() * 0.4);
+        const cw = (3.6 + rng() * 1.8) * s;
         UP.position.set(x + Math.cos(a) * rad, crownY + (rng() - 0.35) * 1.8 * s, z + Math.sin(a) * rad);
         UP.scale.set(cw, cw * (0.8 + rng() * 0.3), cw);
         UP.rotation.set((rng() - 0.5) * 0.5, rng() * 6.283, (rng() - 0.5) * 0.4);
@@ -648,10 +656,10 @@ export function buildFlora(scene, quality = 1) {
         c.setHSL(0.30 + rng() * 0.03, 0.22 + rng() * 0.12, 0.62 + rng() * 0.16);
         crowns.setColorAt(ci, c); ci++;
       }
-      for (let k = 0; k < 2; k++) {
-        const a = rng() * 6.283;
+      for (let k = 0; k < 3; k++) {
+        const a = (k / 3) * 6.283 + rng() * 0.8;
         const rad = (1.2 + rng() * 1.6) * s;
-        const cw = (4.5 + rng() * 2) * s;
+        const cw = (4.8 + rng() * 2) * s;
         UP.position.set(x + Math.cos(a) * rad, crownY + (1.2 + rng() * 1.2) * s, z + Math.sin(a) * rad);
         UP.scale.set(cw, cw, cw);
         UP.rotation.set(-Math.PI / 2 + (rng() - 0.5) * 0.4, rng() * 6.283, (rng() - 0.5) * 0.3);
@@ -677,7 +685,8 @@ export function buildFlora(scene, quality = 1) {
     const branches = new THREE.InstancedMesh(branchGeo, barkDark, pts.length * 3);
     // 冠：真实大羽叶卡（leaf_tree_b —— 雨豆树式巨羽复叶）
     const crownGeo = cardGeo(0.18, 3);
-    const crowns = new THREE.InstancedMesh(crownGeo, leafMat(treeBTex(), { alphaTest: 0.4 }), pts.length * 6);
+    // 加密：每树 6 张围合 + 3 张盖顶（原 4+2），上限 9
+    const crowns = new THREE.InstancedMesh(crownGeo, leafMat(treeBTex(), { alphaTest: 0.4 }), pts.length * 9);
     const c = new THREE.Color();
     let bi = 0, ci = 0;
     pts.forEach(([x, z], i) => {
@@ -704,10 +713,10 @@ export function buildFlora(scene, quality = 1) {
       }
       // 宽扁伞冠：中部 4 张大羽叶卡 + 顶部 2 张近水平
       const crownY = y + th * 0.92;
-      for (let k = 0; k < 4; k++) {
-        const a = (k / 4) * 6.283 + rng() * 0.9;
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * 6.283 + rng() * 0.7;
         const rad = (1.4 + rng() * 1.2) * s;
-        const cw = (5 + rng() * 2.4) * s;
+        const cw = (5.6 + rng() * 2.4) * s;
         UP.position.set(x + Math.cos(a) * rad, crownY + (rng() - 0.4) * 1.4 * s, z + Math.sin(a) * rad);
         UP.scale.set(cw, cw * (0.62 + rng() * 0.16), cw);
         UP.rotation.set((rng() - 0.5) * 0.6, rng() * 6.283, (rng() - 0.5) * 0.4);
@@ -716,10 +725,10 @@ export function buildFlora(scene, quality = 1) {
         c.setHSL(0.26 + rng() * 0.04, 0.18 + rng() * 0.12, 0.72 + rng() * 0.16);
         crowns.setColorAt(ci, c); ci++;
       }
-      for (let k = 0; k < 2; k++) {
-        const a = rng() * 6.283;
+      for (let k = 0; k < 3; k++) {
+        const a = (k / 3) * 6.283 + rng() * 0.9;
         const rad = (1.6 + rng() * 2) * s;
-        const cw = (6.5 + rng() * 2.6) * s;
+        const cw = (7 + rng() * 2.6) * s;
         UP.position.set(x + Math.cos(a) * rad, crownY + (1.4 + rng() * 1.4) * s, z + Math.sin(a) * rad);
         UP.scale.set(cw, cw, cw);
         UP.rotation.set(-Math.PI / 2 + (rng() - 0.5) * 0.45, rng() * 6.283, (rng() - 0.5) * 0.3);

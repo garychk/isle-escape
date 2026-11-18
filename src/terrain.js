@@ -1,6 +1,6 @@
 // 岛屿地形：高度场 / 区域判定 / 地形网格 / 水面
 import * as THREE from 'three';
-import { CFG, POND, SWAMP, MOUNT, RAFT, SPAWN, TRAIL, TRAIL_W, CABIN } from './config.js';
+import { CFG, POND, SWAMP, MOUNT, RAFT, SPAWN, TRAIL, TRAIL_W, CABIN, MARBLE } from './config.js';
 import { fbm, clamp, smoothstep, dist2, segDist2 } from './util.js';
 import { groundDetail, groundNormal } from './textures.js';
 import { createWaterMaterial, setWaterTime } from './water.js';
@@ -51,6 +51,33 @@ export function baseHeight(x, z) {
       const basin = smoothstep(p.r, p.r * 0.34, d);
       const floor = p.y - p.depth + fbm(x * 0.11 + p.x, z * 0.11 - p.z, 2) * 0.22;
       h = h * (1 - basin) + floor * basin;
+    }
+  }
+  // 东岭山（2026-11-18 起：JS 程序化生成，取代 marble.glb 采石场扫描件）
+  // 与洞穴主山同源的 fbm 算法——双峰 + 山脊 + 侵蚀沟壑，风格与全岛统一；
+  // 椭圆 footprint 避免正圆人工感，山顶过 46m 植被自然绝迹成裸岩。
+  {
+    const dx = x - MARBLE.x, dz = (z - MARBLE.z) / 0.86;
+    const d = Math.hypot(dx, dz);
+    let me = 1 - smoothstep(46, 104, d);   // 核心 / 外缘衰减
+    if (me > 0) {
+      // 东侧水潭避让：山体在水潭中心一带衰减为 0，避免把盆地抬成山顶深井；
+      // 水潭水面由 EXTRA_POOLS 独立 plane 承托，山从水潭东侧自然升起
+      let poolMask = 1;
+      for (const p of EXTRA_POOLS) {
+        poolMask *= smoothstep(p.r * 0.75, p.r * 2.0, dist2(x, z, p.x, p.z));
+      }
+      me *= poolMask;
+    }
+    if (me > 0) {
+      const ridge = 1 - Math.abs(fbm(x * 0.021 + 5.3, z * 0.021 - 2.7, 3)) * 1.7;
+      const crest = Math.max(0, 1 - smoothstep(0, 34, d));                       // 主峰尖顶
+      const d2 = Math.hypot(x - (MARBLE.x - 30), z - (MARBLE.z + 18)) / 0.9;
+      const second = Math.max(0, 1 - smoothstep(18, 52, d2));                    // 西南次峰
+      h += (44 + ridge * 14 + fbm(x * 0.045, z * 0.045, 3) * 12) * me * me;
+      h += (crest * 10 + second * 16) * me;
+      // 侵蚀沟壑：打散过于光滑的锥体轮廓
+      h += (fbm(x * 0.1 + 9, z * 0.1 - 4, 4) * 7.5 + fbm(x * 0.26, z * 0.26, 2) * 2.2) * me;
     }
   }
   // 水塘凹陷

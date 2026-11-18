@@ -28,6 +28,31 @@ const SPH_L = new THREE.SphereGeometry(1, 6, 4);    // 48 tri
 const CONE = new THREE.ConeGeometry(1, 1, 6);
 const BOX = new THREE.BoxGeometry(1, 1, 1);
 
+// 羽片：本地沿 +X 从 0→1 生长，Z 为弦向宽度（中间宽两端尖），Y 微拱出翼型。
+// 用几片羽片扇形叠出真实鸟翼/尾羽，替代原来"压扁的球"。双面材质配合顶点色做明暗层次。
+function featherGeo(seg = 5) {
+  const pos = [], nor = [], uv = [], idx = [];
+  for (let i = 0; i <= seg; i++) {
+    const t = i / seg;
+    const w = Math.sin(Math.PI * Math.pow(t, 0.78)) * 0.5; // 根尖收窄、中段最宽
+    const arch = Math.sin(Math.PI * t) * 0.05;             // 轻微翼型拱起
+    pos.push(t, arch, -w, t, arch, w);
+    uv.push(t, 0, t, 1);
+  }
+  for (let i = 0; i < seg; i++) {
+    const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+    idx.push(a, c, b, b, c, d);
+  }
+  for (let i = 0; i < pos.length / 3; i++) nor.push(0, 1, 0);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
+}
+const FEATHER = featherGeo(5);
+
 // 鳞片法线：让纯顶点色的低模也有细密皮纹，不至于一眼塑料
 const SCALE_N = scaleNormal();
 
@@ -164,28 +189,55 @@ function snakeParts() {
 }
 
 function tortoiseParts() {
-  const shell = 0x6d5836, rim = 0x4a3a20, plate = 0xb99c58, skin = 0x9c9a60, belly = 0xd2c592, eye = 0x141109;
-  const a = [
-    P(SPH, shell, [0, 0.165, 0], [0.225, 0.132, 0.265]),
-    P(SPH, rim, [0, 0.098, 0], [0.235, 0.055, 0.270]),
-    P(SPH, belly, [0, 0.085, 0], [0.185, 0.048, 0.225]),
-    P(SPH, plate, [0, 0.275, 0], [0.115, 0.035, 0.130]),
+  const a = 0.225, b = 0.132, c = 0.265, yc = 0.168;   // 壳椭球半轴与中心高
+  const shellTop = 0x6b562f, shellEdge = 0x48381d, seam = 0x2f2510;
+  const scute = 0xa98b4e, scute2 = 0x937c48, scuteHi = 0xc6a96a;
+  const skin = 0x8e8a5e, skinD = 0x6d6943, belly = 0xcbbd8e;
+  const eye = 0x110d07, glint = 0xded8b4, beak = 0x6e6438, claw = 0x4a4430;
+  const HEX = new THREE.CylinderGeometry(1, 1, 1, 6);   // 六棱柱压扁 = 盾片（顶面朝 +Y）
+  const parts = [
+    // 缘盾裙边 + 深色主穹顶 + 腹甲
+    P(SPH, shellEdge, [0, 0.128, 0], [0.234, 0.088, 0.274]),
+    P(SPH, shellTop, [0, yc, 0], [a, b, c]),
+    P(SPH_L, belly, [0, 0.082, 0], [0.186, 0.046, 0.226]),
   ];
-  // 壳上盾片：中央一列 + 两侧各两片
-  for (let i = 0; i < 3; i++) a.push(P(SPH_L, plate, [0, 0.28 - i * 0.009, -0.13 + i * 0.13], [0.075, 0.012, 0.052]));
-  for (const s of [-1, 1]) for (const z of [-0.11, 0.11]) {
-    a.push(P(SPH_L, plate, [s * 0.13, 0.245, z], [0.065, 0.012, 0.055]));
-  }
-  a.push(P(SPH, skin, [0, 0.150, 0.315], [0.078, 0.068, 0.098]));
+  // 盾片贴壳：按椭球曲面求高度与法线倾角，让六边形顺着拱面铺开
+  const put = (x, z, sx, sz, col) => {
+    const q = 1 - (x * x) / (a * a) - (z * z) / (c * c);
+    if (q <= 0.04) return;
+    const y = yc + b * Math.sqrt(q);
+    const ny = (y - yc) / (b * b), nx = x / (a * a), nz = z / (c * c);
+    parts.push(P(HEX, col, [x, y + 0.004, z], [sx, 0.013, sz],
+      { rot: [Math.atan2(nz, ny), 0, -Math.atan2(nx, ny)] }));
+  };
+  // 中央脊盾 5 片（正中一片偏亮）+ 左右肋盾各 3 片
+  const vz = [-0.178, -0.089, 0, 0.089, 0.178];
+  for (let i = 0; i < vz.length; i++) put(0, vz[i], 0.050, 0.046, i === 2 ? scuteHi : scute);
+  for (const s of [-1, 1]) for (const z of [-0.112, 0, 0.112]) put(s * 0.112, z, 0.054, 0.050, z === 0 ? scute : scute2);
+  // 缘盾：沿壳缘一圈小片，勾出甲壳轮廓
+  for (const s of [-1, 1]) for (const z of [-0.19, -0.095, 0, 0.095, 0.19]) put(s * 0.196, z, 0.030, 0.030, seam);
+  for (const z of [-0.245, 0.245]) for (const x of [-0.10, 0, 0.10]) put(x, z, 0.030, 0.026, seam);
+  // 颈 + 头：从壳前伸出，鹰喙带钩、鼻孔、带高光的眼
+  parts.push(P(SPH, skin, [0, 0.150, 0.292], [0.062, 0.058, 0.095]));       // 颈
+  parts.push(P(SPH, skin, [0, 0.162, 0.372], [0.078, 0.070, 0.080]));       // 头
+  parts.push(P(SPH_L, skinD, [0, 0.132, 0.418], [0.052, 0.030, 0.050]));    // 下颌
+  parts.push(P(CONE, beak, [0, 0.150, 0.446], [0.030, 0.052, 0.030], { rot: [Math.PI / 2.35, 0, 0] })); // 钩喙
   for (const s of [-1, 1]) {
-    a.push(P(SPH_L, eye, [s * 0.060, 0.174, 0.365], [0.016, 0.016, 0.016]));
-    for (const z of [-0.17, 0.17]) {
-      a.push(P(SPH, skin, [s * 0.165, 0.072, z], [0.058, 0.052, 0.078]));
-      a.push(P(SPH_L, rim, [s * 0.190, 0.035, z + 0.02], [0.045, 0.018, 0.050]));
+    parts.push(P(SPH_L, eye, [s * 0.060, 0.182, 0.402], [0.017, 0.017, 0.016]));
+    parts.push(P(SPH_L, glint, [s * 0.064, 0.187, 0.413], [0.006, 0.006, 0.006]));
+    parts.push(P(SPH_L, seam, [s * 0.020, 0.196, 0.440], [0.007, 0.006, 0.007])); // 鼻孔
+  }
+  // 柱状四肢（陆龟非鳍状）+ 扁脚掌 + 每脚 3 枚爪
+  for (const s of [-1, 1]) for (const z of [0.16, -0.16]) {
+    parts.push(P(SPH, skin, [s * 0.170, 0.098, z], [0.062, 0.082, 0.078], { rot: [0, 0, -s * 0.18] }));
+    parts.push(P(SPH_L, skinD, [s * 0.190, 0.040, z + 0.018], [0.060, 0.030, 0.072]));  // 脚掌
+    for (let k = -1; k <= 1; k++) {
+      parts.push(P(CONE, claw, [s * 0.198 + k * 0.020, 0.030, z + 0.082],
+        [0.011, 0.038, 0.011], { rot: [Math.PI / 2, 0, 0] }));
     }
   }
-  a.push(P(CONE, rim, [0, 0.120, -0.29], [0.030, 0.10, 0.030], { rot: [-Math.PI / 2, 0, 0] }));
-  return a;
+  parts.push(P(CONE, skinD, [0, 0.112, -0.292], [0.028, 0.095, 0.028], { rot: [-Math.PI / 2, 0, 0] })); // 尾
+  return parts;
 }
 
 function crocParts() {
@@ -222,21 +274,51 @@ function crocParts() {
   return a;
 }
 
-// 鸟：身体 + 头 + 喙 + 尾羽 + 两翼各内外两段，翼尖 aWing 渐变
+// 鸟：流线身体 + 明显的颈/头/喙/眼 + 多层羽片拼出的真实翼形 + 分叉尾羽。
+// 翼尖按 |x| 给 aWing 权重，拍翅只在翼端弯曲，肩部稳定；尾羽给一半权重随之轻摆。
 function makeBirdParts() {
-  const body = 0x666d52, head = 0x4a5040, wing = 0x7d8466, tip = 0x363b2e, belly = 0xd0ccb0, beak = 0xe0b04c;
+  const body = 0x5f6850, bodyD = 0x494f3d, head = 0x555d47, belly = 0xcfcbb0;
+  const cover = 0x79816a, mid = 0x6a7259, prim = 0x404636, tailC = 0x525a44;
+  const beak = 0xe0ad45, beakD = 0xb98528, eye = 0x0e0c07, glint = 0xe8e2c8;
   const a = [
-    P(SPH, body, [0, 0, 0], [0.060, 0.052, 0.135]),
-    P(SPH_L, belly, [0, -0.030, 0.01], [0.048, 0.022, 0.105]),
-    P(SPH_L, head, [0, 0.022, 0.135], [0.046, 0.046, 0.048]),
-    P(CONE, beak, [0, 0.010, 0.198], [0.018, 0.065, 0.018], { rot: [Math.PI / 2, 0, 0] }),
-    P(SPH_L, tip, [0, 0.005, -0.175], [0.062, 0.012, 0.108]),
+    // 纺锤形躯干（前胸饱满、向后收细），腹部浅色，背部深色
+    P(SPH, body, [0, 0, 0.006], [0.058, 0.050, 0.132]),
+    P(SPH_L, belly, [0, -0.028, 0.020], [0.046, 0.022, 0.108]),
+    P(SPH_L, bodyD, [0, 0.030, -0.010], [0.046, 0.018, 0.100]),
+    // 颈 + 头（抬起、前伸），喙上下两片带色差，眼睛带高光点
+    P(SPH_L, body, [0, 0.030, 0.116], [0.033, 0.034, 0.045]),
+    P(SPH, head, [0, 0.044, 0.158], [0.045, 0.044, 0.047]),
+    P(CONE, beak, [0, 0.040, 0.212], [0.020, 0.070, 0.020], { rot: [Math.PI / 2, 0, 0] }),
+    P(CONE, beakD, [0, 0.026, 0.206], [0.014, 0.050, 0.014], { rot: [Math.PI / 2, 0, 0] }),
   ];
-  const wingFn = (x, y, z) => clamp((Math.abs(x) - 0.02) / 0.30, 0, 1);
+  // 翅膀：FEATHER 本地沿 +X 生长；用 rotY 定方向（右翼 +X，左翼 π−角），scale 恒正避免负缩放把法线翻掉。
+  // 由覆羽 → 中级飞羽 → 3 根初级飞羽扇形叠成，前缘整齐、后缘参差。
+  const wingFn = (x, y, z) => clamp((Math.abs(x) - 0.035) / 0.340, 0, 1);
   for (const s of [-1, 1]) {
-    a.push(P(SPH_L, wing, [s * 0.115, 0.020, 0.010], [0.105, 0.016, 0.075], { rot: [0, 0, s * 0.10], wing: wingFn }));
-    a.push(P(SPH_L, tip, [s * 0.255, 0.028, -0.010], [0.095, 0.012, 0.058], { rot: [0, 0, s * 0.16], wing: wingFn }));
-    a.push(P(SPH_L, 0x100e08, [s * 0.035, 0.032, 0.158], [0.010, 0.010, 0.010]));
+    const dir = ang => s > 0 ? ang : Math.PI - ang;   // 关于 Z 轴镜像到左翼
+    // 覆羽（翼根大片，铺出翼面主体）
+    a.push(P(FEATHER, cover, [s * 0.032, 0.030, 0.030], [0.165, 0.160, 0.150],
+      { rot: [0, dir(0.10), 0], wing: wingFn }));
+    // 中级飞羽：沿翼后缘铺两片
+    a.push(P(FEATHER, mid, [s * 0.140, 0.024, -0.010], [0.165, 0.125, 0.092],
+      { rot: [0, dir(0.38), 0], wing: wingFn }));
+    a.push(P(FEATHER, mid, [s * 0.158, 0.022, 0.048], [0.150, 0.105, 0.084],
+      { rot: [0, dir(0.10), 0], wing: wingFn }));
+    // 初级飞羽 3 根：更长更窄，翼尖张开成"手指"
+    for (let k = 0; k < 3; k++) {
+      a.push(P(FEATHER, prim, [s * 0.235, 0.020, -0.058 + k * 0.032], [0.190, 0.098, 0.054],
+        { rot: [0, dir(0.55 + k * 0.17), 0], wing: wingFn }));
+    }
+    // 眼：黑眼球 + 高光，左右各一
+    a.push(P(SPH_L, eye, [s * 0.038, 0.052, 0.176], [0.012, 0.012, 0.012]));
+    a.push(P(SPH_L, glint, [s * 0.041, 0.056, 0.185], [0.004, 0.004, 0.004]));
+  }
+  // 尾羽：5 片扇形朝身后(-Z)展开，rotY = π/2 让 +X 羽片转向 -Z，按 k 散开
+  const tailFn = () => 0.45;
+  for (let k = -2; k <= 2; k++) {
+    a.push(P(FEATHER, k % 2 ? tailC : prim, [k * 0.026, 0.006, -0.130],
+      [0.135 - Math.abs(k) * 0.014, 0.080, 0.034],
+      { rot: [0, Math.PI / 2 - k * 0.24, 0], wing: tailFn }));
   }
   return a;
 }
@@ -378,8 +460,8 @@ export function buildWildlife(scene) {
   // 鸟群不再全岛乱撒：固定盘旋在玩家真正会抬头看的地标上空，
   // 出生点朝外海 / 朝林间各有 1 群，水塘、沼泽、木屋、索桥、北岸也各有一群。
   const FLOCK_CENTERS = [
-    [0, 290, 25, 17], [0, 237.5, 18.75, 9], [-72.5, 140, 17.5, 17], [-97.5, 77.5, 20, 14],
-    [107.5, 65, 22.5, 13], [-42.5, 18.75, 17.5, 16], [0, 75, 27.5, 24], [0, -247.5, 25, 20],
+    [0, 290, 25, 30], [0, 237.5, 18.75, 26], [-72.5, 140, 17.5, 31], [-97.5, 77.5, 20, 28],
+    [107.5, 65, 22.5, 27], [-42.5, 18.75, 17.5, 30], [0, 75, 27.5, 38], [0, -247.5, 25, 34],
   ];
   const flocks = [];
   for (const [cx, cz, radius, height] of FLOCK_CENTERS) {
@@ -404,18 +486,18 @@ export function buildWildlife(scene) {
     addBird('raptor', {
       cx: n ? (rng() - 0.5) * 40 : (rng() - 0.5) * 220,
       cz: n ? 195 + (rng() - 0.5) * 40 : (rng() - 0.5) * 220,
-      radius: 26 + rng() * 28, height: 30 + rng() * 16,
+      radius: 26 + rng() * 28, height: 52 + rng() * 20,
       ang: rng() * 6.283, w: (0.055 + rng() * 0.045) * (rng() < 0.5 ? -1 : 1),
       solo: true, scale: 2.8 + rng() * 1.2,
     });
   }
-  // 海鸟：绕着几处海岸点低空滑翔（不是绕整岛一个大圆，否则永远不在视野里）
+  // 海鸟：绕着几处海岸点滑翔（不是绕整岛一个大圆，否则永远不在视野里）
   const GULL_SPOTS = [[0, 236], [-95, 185], [100, 180], [0, -232], [-185, 90], [180, 60]];
   for (let k = 0; k < 16; k++) {
     const s = GULL_SPOTS[k % GULL_SPOTS.length];
     addBird('gull', {
       cx: s[0] + (rng() - 0.5) * 26, cz: s[1] + (rng() - 0.5) * 26,
-      radius: 10 + rng() * 22, height: 10 + rng() * 11,
+      radius: 10 + rng() * 22, height: 22 + rng() * 14,
       ang: rng() * 6.283, w: (0.05 + rng() * 0.06) * (rng() < 0.5 ? -1 : 1),
       solo: true, scale: 1.8 + rng() * 0.9, coastal: true,
     });
