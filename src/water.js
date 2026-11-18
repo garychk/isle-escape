@@ -1,4 +1,4 @@
-// 水面：三频法线 + 水深渐变 + 岸线泡沫 + Schlick 菲涅尔 + 太阳碎金高光 + 顶点细浪
+// 水面：Gerstner 主浪 + 三频法线 + 水深渐变 + 岸线泡沫 + Schlick 菲涅尔 + 太阳碎金高光
 //   贴图 assets/tex/water_norm.png（tools/make_water.py 生成）；缺失时静默回退程序化法线。
 //   基于 MeshStandardMaterial 注入，保留 three 自带的 PBR 反射 / 光照 / 雾 / 阴影链路。
 import * as THREE from 'three';
@@ -15,10 +15,17 @@ const shared = {
   uSunDir: { value: new THREE.Vector3(0.4, 0.8, 0.4) },
   uSunCol: { value: new THREE.Color(0xfff2d8) },
   uSunPower: { value: 1 },
+  uWind: { value: 0.25 },        // 0 微风 ~ 1.2 风暴；由 env.rain/weather 每帧同步
+  uWaveEnable: { value: 1 },     // ?nowaves=1 整体关闭主浪
 };
 const mats = [];
 let loaded = false;
 let envRef = null;
+// QA 冻结开关：setFx(false) 时连同 uTime 一起停住，对照组的画面完全静止
+let frozen = false;
+
+/** QA 专用：冻结水面时间（法线滚动/浪相位全部停住），供开/关像素差对照 */
+export function setWaterFrozen(v) { frozen = !!v; }
 
 export async function loadWaterTextures(forceFallback = false) {
   if (shared.uWaterTex.value) return loaded;
@@ -49,8 +56,12 @@ export async function loadWaterTextures(forceFallback = false) {
 export function bindWaterEnv(env) { envRef = env; }
 
 export function setWaterTime(t) {
-  shared.uTime.value = t;
+  if (!frozen) shared.uTime.value = t;
   const e = envRef;
+  // 风暴 / 雨天浪更高更急；uWind 同时驱动振幅与推进速度
+  shared.uWind.value = e
+    ? Math.min(1.2, 0.28 + (e.rain || 0) * 0.72 + (e.weather === 'storm' ? 0.22 : 0))
+    : 0.25;
   if (!e) return;
   // env.update 里 useMoon 的判据是太阳高度 < -0.02；sunDir.y 与其同号，可直接判定
   shared.uSunDir.value.copy(e.sunDir.y < -0.02 ? e.moonDir : e.sunDir);
@@ -58,11 +69,20 @@ export function setWaterTime(t) {
   shared.uSunPower.value = Math.min(1, Math.max(0, e.sun.intensity / 3.0));
 }
 
+/** ?nowaves=1：关掉顶点主浪，保留法线波纹，便于前后对比 */
+export function setWavesEnabled(v) { shared.uWaveEnable.value = v ? 1 : 0; }
+
 export function waterState() {
+  const sea = mats.length ? mats[0].userData.waterU : null;
   return {
     tex: loaded,
     time: +shared.uTime.value.toFixed(1),
     materials: mats.length,
+    waves: shared.uWaveEnable.value > 0,
+    wind: +shared.uWind.value.toFixed(2),
+    waveAmp: sea
+      ? +(sea.uWave.value * (0.78 + 0.60 * shared.uWind.value) * shared.uWaveEnable.value).toFixed(2)
+      : 0,
     sunPower: +shared.uSunPower.value.toFixed(2),
     sunDir: shared.uSunDir.value.toArray().map(v => +v.toFixed(2)),
     sunColor: '#' + shared.uSunCol.value.getHexString(),
@@ -72,23 +92,69 @@ export function waterState() {
 const VERT_DECL = `
 uniform float uTime;
 uniform float uWave;
+uniform float uWind;
+uniform float uWaveEnable;
+uniform vec2 uCenter, uSize;
 varying vec2 vWorldXZ;
+varying vec2 vWaveSlope;
+varying float vWaveCrest;
 `;
+// Gerstner 波：横向位移让波峰变尖、波谷变圆，浪才有"形"；同时给出解析法线与波峰高度，
+// 供片元把高光/碎浪白沫对齐到浪脊上。相位用世界 xz，所有水域共享同一片涌向岸的波场。
 const VERT_BODY = `
   #include <begin_vertex>
-  float wv = sin(transformed.x * 0.125 + uTime * 1.05) * 0.055
-           + sin(transformed.y * 0.171 - uTime * 0.83) * 0.038
-           + sin((transformed.x + transformed.y) * 0.082 + uTime * 0.55) * 0.045;
-  transformed.z += wv * uWave;
+  vec2 P = (modelMatrix * vec4(position, 1.0)).xz;
+  float T = uTime * (0.85 + 0.45 * uWind);
+  float A = uWave * (0.78 + 0.60 * uWind) * uWaveEnable;
+  vec2 disp = vec2(0.0);
+  float h = 0.0;
+  vec2 nrm = vec2(0.0);
+  // 长涌浪 78m：决定海面轮廓
+  vec2 D1 = vec2(0.861, 0.508);
+  float k1 = 6.2831853 / 78.0;
+  float f1 = k1 * dot(D1, P) - T * 0.373;
+  float a1 = 0.42 * A;
+  disp += 0.55 * a1 * D1 * cos(f1);
+  h += a1 * sin(f1);
+  nrm += -D1 * (k1 * a1) * cos(f1);
+  // 中浪 46m：斜切过来，打散规则条纹
+  vec2 D2 = vec2(0.555, -0.832);
+  float k2 = 6.2831853 / 46.0;
+  float f2 = k2 * dot(D2, P) - T * 0.486 + 1.7;
+  float a2 = 0.26 * A;
+  disp += 0.55 * a2 * D2 * cos(f2);
+  h += a2 * sin(f2);
+  nrm += -D2 * (k2 * a2) * cos(f2);
+  // 短浪 27m：细碎浪尖
+  vec2 D3 = vec2(-0.287, -0.958);
+  float k3 = 6.2831853 / 27.0;
+  float f3 = k3 * dot(D3, P) - T * 0.634 + 3.1;
+  float a3 = 0.14 * A;
+  disp += 0.55 * a3 * D3 * cos(f3);
+  h += a3 * sin(f3);
+  nrm += -D3 * (k3 * a3) * cos(f3);
+  // 靠近水面矩形边缘把浪渐隐到 0，否则横向位移会把边界拉出锯齿/漏底
+  vec2 eb = abs(P - uCenter) / (uSize * 0.5);
+  float fade = 1.0 - smoothstep(0.74, 0.99, max(eb.x, eb.y));
+  h *= fade; disp *= fade; nrm *= fade;
+  // 水面网格绕 X 轴 -90°：局部 x→世界 x，局部 y→世界 -z，局部 z→世界 y
+  transformed.x += disp.x;
+  transformed.y += -disp.y;
+  transformed.z += h;
+  vWaveSlope = nrm;
+  vWaveCrest = clamp(h / max(0.82 * A, 0.001) * 0.5 + 0.5, 0.0, 1.0);
   vWorldXZ = (modelMatrix * vec4(transformed, 1.0)).xz;
 `;
 const FRAG_DECL = `
 uniform float uTime, uHasTex, uOpacity, uNrmScale, uRipple, uFoam;
 uniform float uSunPower, uSunGloss, uSunStrength;
+uniform float uWaveFoam;
 uniform sampler2D uWaterTex, uDepth;
 uniform vec2 uCenter, uSize;
 uniform vec3 uDeep, uShallow, uSunDir, uSunCol;
 varying vec2 vWorldXZ;
+varying vec2 vWaveSlope;
+varying float vWaveCrest;
 `;
 
 // 插在 <normal_fragment_maps> 之后：此时 normal 已就绪，diffuseColor 尚未参与光照，
@@ -104,13 +170,17 @@ const FRAG_BODY = `
   // 三频：长涌浪 / 中波纹 / 细涟漪，方向互不相同，打散平铺感
   vec2 slope = ((a.rg * 2.0 - 1.0) * 0.80
               + (b.rg * 2.0 - 1.0) * 0.48
-              + (c.rg * 2.0 - 1.0) * 0.22) * uRipple;
+              + (c.rg * 2.0 - 1.0) * 0.22) * uRipple
+              + vWaveSlope * 1.45;   // 浪形法线：让太阳高光与天光反射沿着浪脊分布
   vec3 wn = normalize(vec3(slope.x, 1.0, slope.y));
   normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
 
   // 水深：0 = 贴岸 / 1 = 深水（由 CPU 端按地形高度场烘焙成深度图）
+  // alpha 通道是盆地掩码：水面矩形超出挖盆范围的部分 = 0，直接隐掉（杜绝陆地上悬空水）
   vec2 duv = clamp((vWorldXZ - uCenter) / uSize + 0.5, 0.001, 0.999);
-  float dep = texture2D(uDepth, duv).r;
+  vec4 dtx = texture2D(uDepth, duv);
+  float dep = dtx.r;
+  float basin = dtx.a;
   float d = smoothstep(0.015, 0.80, dep);
   vec3 water = mix(uShallow, uDeep, d);
 
@@ -121,12 +191,18 @@ const FRAG_BODY = `
   float band = smoothstep(0.0, 0.035, dep) * (1.0 - smoothstep(0.08, 0.34, dep));
   float foam = band * smoothstep(0.52, 0.90, crest) * uFoam;
   foam += smoothstep(0.96, 1.0, crest) * 0.02 * uFoam * d;
+  // 浪尖碎浪：只在波峰顶一条窄带、且离开浅滩后出现，随浪一起移动（不是静态白点）
+  float waveFoam = smoothstep(0.80, 0.995, vWaveCrest)
+                 * smoothstep(0.20, 0.55, d) * uWaveFoam;
+  foam += waveFoam * (0.55 + 0.45 * crest);
 
   // Schlick 菲涅尔（水 F0 ≈ 0.02）：掠射角更亮更不透明，远处海面才会映出天光
   vec3 vdir = normalize(vViewPosition);
   float cosTheta = clamp(dot(vdir, normal), 0.0, 1.0);
   float fres = 0.02 + 0.98 * pow(1.0 - cosTheta, 5.0);
   water = mix(water, vec3(0.62, 0.74, 0.80), fres * 0.24);
+  // 波峰迎光面略亮，浪谷更深，起伏一眼可辨
+  water += vec3(0.015, 0.030, 0.036) * max(vWaveCrest - 0.60, 0.0) * (0.4 + 0.6 * d);
   // 水下细碎光斑，浅水更明显
   water += vec3(0.035, 0.045, 0.038) * (crest - 0.5) * (1.0 - d) * 0.45;
 
@@ -141,16 +217,18 @@ const FRAG_BODY = `
   totalEmissiveRadiance += uSunCol * (glint + sheen);
 
   diffuseColor.rgb = mix(water, vec3(0.88, 0.93, 0.94), foam);
-  // 贴岸的极浅水淡出，避免水面矩形/凹陷边缘出现硬贴片感
+  // 贴岸的极浅水淡出，避免水面矩形/凹陷边缘出现硬贴片感；再乘盆地掩码，
+  // 越过盆地的矩形悬空部分整片透明，陆地上不再浮水
   diffuseColor.a = clamp(uOpacity * mix(0.35, 1.0, d)
-    + fres * 0.28 * (0.35 + 0.65 * d), 0.0, 1.0);
+    + fres * 0.28 * (0.35 + 0.65 * d), 0.0, 1.0) * basin;
 `;
 
 /**
  * @param {object} o
  *  center/size: 水面中心与尺寸（世界米），depth: 深度 DataTexture
- *  deep/shallow: 深浅水色, nrmScale: 法线每米 UV, ripple/wave/foam: 强度
- *  sunGloss/sunStrength: 太阳高光锐度与强度
+ *  deep/shallow: 深浅水色, nrmScale: 法线每米 UV, ripple: 细波纹强度
+ *  wave: Gerstner 主浪幅度倍率（海 1.0 / 静水 ~0.1）, foam: 岸线泡沫
+ *  waveFoam: 浪尖碎浪白沫强度, sunGloss/sunStrength: 太阳高光锐度与强度
  */
 export function createWaterMaterial(o) {
   const U = {
@@ -172,6 +250,9 @@ export function createWaterMaterial(o) {
     uRipple: { value: o.ripple },
     uWave: { value: o.wave },
     uFoam: { value: o.foam },
+    uWaveFoam: { value: o.waveFoam ?? 0.55 },
+    uWind: shared.uWind,
+    uWaveEnable: shared.uWaveEnable,
   };
   const m = new THREE.MeshStandardMaterial({
     color: 0xffffff,

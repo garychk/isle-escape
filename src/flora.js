@@ -1,9 +1,10 @@
-// 热带雨林植被：巨树（板根+叶簇卡片）/ 棕榈 / 大叶林下植物 / 藤蔓 / 蕨 / 草 / 落叶层 / 岩石 / 倒木
+// 热带雨林植被：巨树（板根+叶簇卡片）/ 棕榈 / 椰子树（海岸） / 橡胶树（成簇） / 羽叶乔木（伞冠）
+//   / 大叶林下植物 / 藤蔓 / 蕨 / 草 / 落叶层 / 岩石 / 倒木
 import * as THREE from 'three';
 import { CFG, TRAIL_W, SPAWN, RAFT, POND, SWAMP, CABIN } from './config.js';
 import { mulberry32, clamp, smoothstep, dist2 } from './util.js';
 import { baseHeight, terrainY, TERRAIN_SEG, inCaveCorr, trailDist } from './terrain.js';
-import { barkTex, barkNormal, rockTex, grassTex, fernTex, canopyTex, palmFrondTex, bigLeafTex, vineTex, litterTex } from './textures.js';
+import { barkTex, barkNormal, rockTex, grassTex, fernTex, canopyTex, palmFrondTex, bigLeafTex, vineTex, litterTex, coconutBarkTex, rubberBarkTex, treeATex, treeBTex } from './textures.js';
 import { instance } from './assets.js';
 
 export const colliders = []; // {x, z, r} 圆柱碰撞体
@@ -48,6 +49,93 @@ const UP = new THREE.Object3D();
 const YAX = new THREE.Vector3(0, 1, 0);
 const ZAX = new THREE.Vector3(0, 0, 1);
 const _v = new THREE.Vector3();
+// —— 全局风场 ——
+// 注意：Three.js 的 uniform 必须是 { value: x }。旧版这里写成了 { time: t }，
+// shader 里 uFoliageWindTime 恒为 0，叶片只被静态偏移、完全不摆（"树叶都不动"的根因）。
+// 所有叶片材质共享同一组 uniform 对象，一次更新即可全岛同步。
+const windU = {
+  uWindTime: { value: 0 },
+  uWindStrength: { value: 0.75 },
+  uWindDir: { value: new THREE.Vector2(0.86, 0.51) },
+  uWindGust: { value: 1 },
+};
+export const foliageWindState = () => ({
+  enabled: windEnabled,
+  time: +windU.uWindTime.value.toFixed(2),
+  strength: +windU.uWindStrength.value.toFixed(2),
+  gust: +windU.uWindGust.value.toFixed(2),
+  dir: windU.uWindDir.value.toArray().map(v => +v.toFixed(2)),
+  materials: windMatCount,
+});
+let windEnabled = true;
+let windMatCount = 0;
+export function setFoliageWindEnabled(v) { windEnabled = !!v; }
+
+/** 每帧同步：t=秒，env=环境系统（雨量/天气决定风力），风向缓慢旋转避免一直往同一边倒 */
+export function updateFoliageWind(t, env, enabled = true) {
+  windU.uWindTime.value = t;
+  windEnabled = enabled;
+  if (!enabled) { windU.uWindStrength.value = 0; return; }
+  const rain = env ? (env.rain || 0) : 0;
+  const storm = env && env.weather === 'storm' ? 0.30 : 0;
+  // 晴天微风 0.62 → 暴雨 1.75；夜间略收，白天树冠更活
+  const night = env ? (env.night || 0) : 0;
+  windU.uWindStrength.value = 0.62 + rain * 0.95 + storm - night * 0.12;
+  // 阵风包络：低频起伏 + 偶发短促强阵风，shader 里再叠一层空间错相
+  const g = 0.72 + 0.28 * Math.sin(t * 0.29) * Math.sin(t * 0.11 + 1.3)
+    + 0.22 * Math.pow(Math.max(0, Math.sin(t * 0.077 + 2.1)), 6);
+  windU.uWindGust.value = g;
+  const a = 0.55 + Math.sin(t * 0.031) * 0.42 + Math.sin(t * 0.013) * 0.20;
+  windU.uWindDir.value.set(Math.cos(a), Math.sin(a)).normalize();
+}
+
+// 注入到任意材质（含 MeshDepthMaterial，让树影与叶片同步摆动）
+const WIND_DECL = `
+uniform float uWindTime, uWindStrength, uWindGust;
+uniform vec2 uWindDir;
+`;
+const WIND_BODY = `
+  #include <begin_vertex>
+  // 实例世界位置作相位种子：每棵树、每丛草都不同步，避免整片林子齐刷刷地摆
+  vec2 iw = vec2(0.0);
+  float iscale = 1.0;
+  #ifdef USE_INSTANCING
+    iw = vec2(instanceMatrix[3].x, instanceMatrix[3].z);
+    iscale = max(length(instanceMatrix[0].xyz), 0.001);
+  #endif
+  float ph = dot(iw, vec2(0.085, 0.117));
+  float T = uWindTime;
+  // 大尺度阵风：缓慢的包络让风有"一阵一阵"的呼吸感
+  float envelope = (0.62 + 0.38 * sin(T * 0.31 + ph * 0.5)
+                  + 0.16 * sin(T * 0.83 + ph * 1.3)) * uWindGust;
+  // 摆枝：三个不同频率叠加，不成周期
+  float sway = (sin(T * 0.95 + ph) * 0.62
+              + sin(T * 1.87 + ph * 1.73) * 0.26
+              + sin(T * 0.43 + ph * 0.37) * 0.34) * envelope;
+  // 叶片高频颤动：局部坐标让同一株里的每片叶子也不同步
+  float flutter = sin(T * 4.6 + position.x * 6.1 + position.y * 3.7
+                    + position.z * 2.9 + ph * 2.3) * 0.30;
+  // 离根部越远摆得越多（卡片用 y、羽叶用 x 作为"伸出长度"）
+  float reach = max(abs(position.y), abs(position.x) * 0.85);
+  float w = clamp(reach * 0.62 + 0.12, 0.0, 1.0);
+  // 实例缩放归一化：位移是局部空间，不除 iscale 的话大树冠会被放大数倍
+  float sf = clamp(iscale, 0.6, 2.8);
+  float amp = uWindStrength * w * (0.34 * sf / iscale);
+  vec2 bend = uWindDir * (sway + flutter) * amp;
+  transformed.x += bend.x;
+  transformed.z += bend.y;
+  transformed.y += abs(sway) * amp * 0.16;
+`;
+function applyWind(mat) {
+  windMatCount++;
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, windU);
+    shader.vertexShader = WIND_DECL + shader.vertexShader.replace(
+      '#include <begin_vertex>', WIND_BODY);
+  };
+  mat.customProgramCacheKey = () => 'isle-foliage-wind-v2';
+  return mat;
+}
 
 // 脚下地形的最小/最大高度：直接扫半径 r 方形范围内覆盖到的地形网格顶点。
 // 地形表面是分段线性的，最低点必然落在某个网格顶点上（环上采样会漏掉顶点），
@@ -88,23 +176,24 @@ function footBase(x, z, r, sink = 0.15) {
 function placeOK(x, z, opts = {}) {
   const h = baseHeight(x, z);
   const r = dist2(x, z, 0, 0);
-  if (r > 208 || r < 8) return false;
-  if (h < 2.4 || h > 46) return false;
-  if (trailDist(x, z) < (opts.nearTrail ? 1.2 : TRAIL_W + 1.2)) return false;
-  if (inCaveCorr(x, z) || (Math.abs(x) < 15 && z < -40 && z > -180)) return false;
-  if (dist2(x, z, SPAWN.x, SPAWN.z) < (opts.nearTrail ? 3 : 12)) return false;
-  if (dist2(x, z, RAFT.x, RAFT.z) < 13) return false;
-  if (dist2(x, z, CABIN.x, CABIN.z) < 17) return false; // 林中木屋空地不长树
-  if (Math.abs(z + 6) < 21 && Math.abs(x) < 14) return false;
-  if (Math.abs(x - 86) < 5 && z < 98 && z > 8) return false;
-  const e = 1.6;
+  if (r > 260 || r < 10) return false;
+  if (h < (opts.minH ?? 2.4) || h > (opts.maxH ?? 46)) return false;
+  if (trailDist(x, z) < (opts.nearTrail ? 1.5 : TRAIL_W + 1.5)) return false;
+  if (inCaveCorr(x, z) || (Math.abs(x) < 18.75 && z < -50 && z > -225)) return false;
+  if (dist2(x, z, SPAWN.x, SPAWN.z) < (opts.nearTrail ? 3.75 : 15)) return false;
+  if (dist2(x, z, RAFT.x, RAFT.z) < 16.25) return false;
+  if (dist2(x, z, CABIN.x, CABIN.z) < 21.25) return false; // 林中木屋空地不长树
+  if (Math.abs(z + 7.5) < 26.25 && Math.abs(x) < 17.5) return false; // 断魂谷谷底
+  if (Math.abs(x - SWAMP.x) < 6.25 && z < 122.5 && z > 10) return false; // 沼泽木板路带
+  if (Math.abs(x - 175) < 82 && Math.abs(z + 100) < 58) return false;  // 东岭大理石山 footprint
+  const e = 2;
   const slope = Math.hypot(baseHeight(x + e, z) - baseHeight(x - e, z), baseHeight(x, z + e) - baseHeight(x, z - e)) / (2 * e);
   if (slope > 0.85) return false;
   // 陡坎/沟沿：脚下高差过大的位置不种（否则整棵树会骑在断面之上）
   if (opts.maxSpan && footSpan(x, z, opts.spanR || 2.4) > opts.maxSpan) return false;
   if (!opts.swampOK) {
-    if (dist2(x, z, SWAMP.x, SWAMP.z) < 47) return false;
-    if (dist2(x, z, POND.x, POND.z) < 34) return false;
+    if (dist2(x, z, SWAMP.x, SWAMP.z) < 58.75) return false;
+    if (dist2(x, z, POND.x, POND.z) < 42.5) return false;
   }
   return true;
 }
@@ -113,7 +202,7 @@ function scatter(count, opts = {}) {
   let tries = 0;
   while (out.length < count && tries < count * 60) {
     tries++;
-    const x = (rng() * 2 - 1) * 252, z = (rng() * 2 - 1) * 252;
+    const x = (rng() * 2 - 1) * 315, z = (rng() * 2 - 1) * 315;
     if (!placeOK(x, z, opts)) continue;
     if (opts.zone && !opts.zone(x, z)) continue;
     out.push([x, z]);
@@ -215,12 +304,24 @@ function boleGeo() {
 }
 
 function leafMat(map, opts = {}) {
-  return new THREE.MeshStandardMaterial({
+  const mat = new THREE.MeshStandardMaterial({
     map, alphaTest: opts.alphaTest ?? 0.45, side: THREE.DoubleSide,
     roughness: 0.82, metalness: 0, transparent: false,
     color: opts.color ?? 0xffffff,
     ...opts.extra,
   });
+  // 叶片（树冠/羽叶/草/蕨/藤）统一注入风场；树干和岩石不参与，避免整棵树像橡皮一样摇摆。
+  applyWind(mat);
+  // 阴影深度材质也注入同一套风摆，否则树冠在动、地上的影子却纹丝不动
+  const depth = new THREE.MeshDepthMaterial({
+    depthPacking: THREE.RGBADepthPacking,
+    map: mat.map || null,
+    alphaTest: mat.alphaTest || 0,
+    side: mat.side,
+  });
+  applyWind(depth);
+  mat.customDepthMaterial = depth;
+  return mat;
 }
 
 export function buildFlora(scene, quality = 1) {
@@ -253,7 +354,7 @@ export function buildFlora(scene, quality = 1) {
 
   // ================= 1. 雨林巨树（板根 + 主枝 + 高层树冠） =================
   {
-    const N = Math.round(340 * quality);
+    const N = Math.round(500 * quality);
     // maxSpan：裙边高差超过 4.6m 就不种（≈坡度 0.88 的均匀坡是极限）。
     // 这是为了让"骑在隧道口/峡谷断面上的树"整批消失，而不是让它们沉 30m 进山里。
     const pts = scatter(N, { maxSpan: 4.6, spanR: 2.6 });
@@ -285,7 +386,7 @@ export function buildFlora(scene, quality = 1) {
       UP.updateMatrix();
       trunk.setMatrixAt(i, UP.matrix);
       // 碰撞半径要盖住板根裙（最远伸到 ~2.3×s），否则人物会整个人嵌进树根里"穿树"
-      colliders.push({ x, z, r: 1.6 * s });
+      colliders.push({ x, z, r: 1.6 * s, type: "giant" });
       // 板根
       const bn = 4 + (rng() < 0.5 ? 1 : 0);
       for (let k = 0; k < bn; k++) {
@@ -347,10 +448,10 @@ export function buildFlora(scene, quality = 1) {
 
   // ================= 2. 棕榈（弯曲树干 + 羽状叶冠） =================
   {
-    const N = Math.round(200 * quality);
+    const N = Math.round(288 * quality);
     const pts = scatter(N - 40);
     // 靠海与沼泽边上更密
-    const extra = scatter(40, { nearTrail: true, swampOK: true, zone: (x, z) => dist2(x, z, 0, 0) > 150 });
+    const extra = scatter(50, { nearTrail: true, swampOK: true, zone: (x, z) => dist2(x, z, 0, 0) > 187.5 });
     const all = [...pts, ...extra];
     const SEG = 7;
     const segGeo = new THREE.CylinderGeometry(0.16, 0.24, 1, 7);
@@ -383,7 +484,7 @@ export function buildFlora(scene, quality = 1) {
         segs.setMatrixAt(si++, UP.matrix);
         px = x1; py = y1; pz = z1;
       }
-      colliders.push({ x, z, r: 0.4 * s });
+      colliders.push({ x, z, r: 0.4 * s, type: "palm" });
       // 叶冠
       const nf = 9 + Math.floor(rng() * 3);
       for (let k = 0; k < nf; k++) {
@@ -406,9 +507,236 @@ export function buildFlora(scene, quality = 1) {
     group.add(segs, fronds);
   }
 
+  // ================= 2A. 椰子树（海岸椰林：高细弯干 + 环纹皮 + 长垂羽冠 + 果串） =================
+  {
+    // 近岸环带成林：离海近、海拔低（minH/maxH 放宽到沙滩后缘）
+    const N = Math.round(250 * quality);
+    const pts = scatter(N, { nearTrail: true, swampOK: true, maxH: 9, zone: (x, z) => dist2(x, z, 0, 0) > 187 });
+    const SEG = 8;
+    const segGeo = new THREE.CylinderGeometry(0.12, 0.2, 1, 8);
+    segGeo.translate(0, 0.5, 0);
+    const cocBark = coconutBarkTex().clone(); cocBark.needsUpdate = true; cocBark.repeat.set(2, 2.2);
+    const trunkMat = new THREE.MeshStandardMaterial({
+      map: cocBark, normalMap: barkN, normalScale: new THREE.Vector2(0.4, 0.4),
+      color: 0xcfc3ac, roughness: 0.95,
+    });
+    const segs = new THREE.InstancedMesh(segGeo, trunkMat, pts.length * SEG);
+    const fg = frondGeo();
+    const fronds = new THREE.InstancedMesh(fg, leafMat(palmT, { alphaTest: 0.3 }), pts.length * 15);
+    const nuts = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.16, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0x6d5232, roughness: 0.9 }), pts.length * 4);
+    const c = new THREE.Color();
+    let si = 0, fi = 0, ni = 0;
+    const qy = new THREE.Quaternion(), qz = new THREE.Quaternion();
+    pts.forEach(([x, z]) => {
+      const s = 0.9 + rng() * 0.45;
+      const H = (10 + rng() * 6) * s;
+      const y = footBase(x, z, 0.4 * s, 0.12);
+      const la = rng() * 6.283;
+      const bendAmt = (1.2 + rng() * 1.8) * s;
+      // 沿曲线堆叠 8 段（比棕榈更高更细，弯曲更明显）
+      for (let k = 0; k < SEG; k++) {
+        const t0 = k / SEG, t1 = (k + 1) / SEG;
+        const x0 = x + Math.cos(la) * bendAmt * t0 * t0, z0 = z + Math.sin(la) * bendAmt * t0 * t0;
+        const x1 = x + Math.cos(la) * bendAmt * t1 * t1, z1 = z + Math.sin(la) * bendAmt * t1 * t1;
+        const y0 = y + H * t0, y1 = y + H * t1;
+        const dir = new THREE.Vector3(x1 - x0, y1 - y0, z1 - z0);
+        const len = dir.length(); dir.normalize();
+        UP.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+        UP.quaternion.setFromUnitVectors(YAX, dir);
+        UP.scale.set(s * (1 - t0 * 0.3), len * 1.06, s * (1 - t0 * 0.3));
+        UP.updateMatrix();
+        segs.setMatrixAt(si++, UP.matrix);
+      }
+      colliders.push({ x, z, r: 0.38 * s, type: "coconut" });
+      // 长垂羽冠：片数多、下垂明显
+      const nf = 12 + Math.floor(rng() * 4);
+      for (let k = 0; k < nf && fi < pts.length * 15; k++) {
+        const yaw = (k / nf) * 6.283 + rng() * 0.25;
+        const droop = 0.5 + rng() * 0.6;
+        qy.setFromAxisAngle(YAX, yaw);
+        qz.setFromAxisAngle(ZAX, -droop);
+        UP.position.set(x + Math.cos(la) * bendAmt, y + H - 0.05, z + Math.sin(la) * bendAmt);
+        UP.quaternion.copy(qy).multiply(qz);
+        const L = (3.8 + rng() * 1.7) * s;
+        UP.scale.set(L, L, L);
+        UP.updateMatrix();
+        fronds.setMatrixAt(fi, UP.matrix);
+        c.setHSL(0.23 + rng() * 0.04, 0.24 + rng() * 0.14, 0.78 + rng() * 0.18);
+        fronds.setColorAt(fi, c); fi++;
+      }
+      // 椰子果串（挂在冠心下方）
+      const nn = 3 + Math.floor(rng() * 3);
+      for (let k = 0; k < nn && ni < pts.length * 4; k++) {
+        UP.position.set(x + Math.cos(la) * bendAmt + (rng() - 0.5) * 0.5, y + H - 0.3 - rng() * 0.24, z + Math.sin(la) * bendAmt + (rng() - 0.5) * 0.5);
+        const ns = (0.8 + rng() * 0.5) * s;
+        UP.scale.set(ns, ns * (0.85 + rng() * 0.3), ns);
+        UP.rotation.set(rng() * 3, rng() * 6.28, rng() * 3);
+        UP.updateMatrix();
+        nuts.setMatrixAt(ni, UP.matrix); ni++;
+      }
+    });
+    segs.count = si; fronds.count = fi; nuts.count = ni;
+    segs.castShadow = soft; fronds.castShadow = soft; nuts.castShadow = false;
+    group.add(segs, fronds, nuts);
+  }
+
+  // ================= 2B. 橡胶树（内陆成簇：笔直灰白干 + 卵圆亮叶冠） =================
+  {
+    // 簇状分布（种植园感）：先撒簇心，再在簇心周围散开 4~6 棵
+    const centers = scatter(Math.round(38 * quality), { maxSpan: 3.6, spanR: 2.2, zone: (x, z) => dist2(x, z, 0, 0) < 206 });
+    const raw = [];
+    for (const [cx, cz] of centers) {
+      const n = 4 + Math.floor(rng() * 3);
+      for (let k = 0; k < n; k++) {
+        const a = rng() * 6.283, rr = 3 + rng() * 7;
+        raw.push([cx + Math.cos(a) * rr, cz + Math.sin(a) * rr]);
+      }
+    }
+    const pts = raw.filter(([x, z]) => placeOK(x, z, { maxSpan: 3.6, spanR: 1.6 }));
+    const thGeo = new THREE.CylinderGeometry(0.18, 0.3, 1, 8);
+    thGeo.translate(0, 0.5, 0);
+    const rbTex = rubberBarkTex().clone(); rbTex.needsUpdate = true; rbTex.repeat.set(1.6, 4);
+    const trunkMat = new THREE.MeshStandardMaterial({
+      map: rbTex, normalMap: barkN, normalScale: new THREE.Vector2(0.35, 0.35),
+      color: 0xd6d0c2, roughness: 0.92,
+    });
+    const trunks = new THREE.InstancedMesh(thGeo, trunkMat, pts.length);
+    const branchGeo = new THREE.CylinderGeometry(0.05, 0.16, 1, 6);
+    branchGeo.translate(0, 0.5, 0);
+    const branches = new THREE.InstancedMesh(branchGeo, trunkMat, pts.length * 4);
+    // 冠：真实阔叶卡（leaf_tree_a，椭圆单片叶 —— 橡胶叶形态）
+    const crownGeo = cardGeo(0.14, 3);
+    const crowns = new THREE.InstancedMesh(crownGeo, leafMat(treeATex(), { alphaTest: 0.4 }), pts.length * 10);
+    const c = new THREE.Color();
+    let bi = 0, ci = 0;
+    pts.forEach(([x, z], i) => {
+      const s = 0.85 + rng() * 0.45;
+      const th = (9 + rng() * 6) * s;
+      const y = footBase(x, z, 0.55 * s, 0.18);
+      const lean = (rng() - 0.5) * 0.025;
+      UP.position.set(x, y, z);
+      UP.scale.set(s, th, s);
+      UP.rotation.set(lean, rng() * 6.28, lean);
+      UP.updateMatrix();
+      trunks.setMatrixAt(i, UP.matrix);
+      colliders.push({ x, z, r: 0.5 * s, type: "rubber" });
+      // 主枝 3~4：从干上部以较平的角度斜出
+      const bn = 3 + Math.floor(rng() * 2);
+      for (let k = 0; k < bn && bi < pts.length * 4; k++) {
+        const a = rng() * 6.283;
+        const tl = 1.1 + rng() * 0.35;
+        _v.set(Math.cos(a) * Math.sin(tl), Math.cos(tl), Math.sin(a) * Math.sin(tl)).normalize();
+        UP.position.set(x, y + th * (0.62 + rng() * 0.14), z);
+        UP.quaternion.setFromUnitVectors(YAX, _v);
+        UP.scale.set(s, (3 + rng() * 2.2) * s, s);
+        UP.updateMatrix();
+        branches.setMatrixAt(bi, UP.matrix); bi++;
+      }
+      // 卵圆冠：分两层围合 + 盖顶
+      const crownY = y + th * 0.86;
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * 6.283 + rng() * 0.7;
+        const rad = (0.9 + (k % 3) * 0.7) * s * (0.8 + rng() * 0.4);
+        const cw = (3.2 + rng() * 1.8) * s;
+        UP.position.set(x + Math.cos(a) * rad, crownY + (rng() - 0.35) * 1.8 * s, z + Math.sin(a) * rad);
+        UP.scale.set(cw, cw * (0.8 + rng() * 0.3), cw);
+        UP.rotation.set((rng() - 0.5) * 0.5, rng() * 6.283, (rng() - 0.5) * 0.4);
+        UP.updateMatrix();
+        crowns.setMatrixAt(ci, UP.matrix);
+        c.setHSL(0.30 + rng() * 0.03, 0.22 + rng() * 0.12, 0.62 + rng() * 0.16);
+        crowns.setColorAt(ci, c); ci++;
+      }
+      for (let k = 0; k < 2; k++) {
+        const a = rng() * 6.283;
+        const rad = (1.2 + rng() * 1.6) * s;
+        const cw = (4.5 + rng() * 2) * s;
+        UP.position.set(x + Math.cos(a) * rad, crownY + (1.2 + rng() * 1.2) * s, z + Math.sin(a) * rad);
+        UP.scale.set(cw, cw, cw);
+        UP.rotation.set(-Math.PI / 2 + (rng() - 0.5) * 0.4, rng() * 6.283, (rng() - 0.5) * 0.3);
+        UP.updateMatrix();
+        crowns.setMatrixAt(ci, UP.matrix);
+        c.setHSL(0.29 + rng() * 0.04, 0.20 + rng() * 0.10, 0.66 + rng() * 0.14);
+        crowns.setColorAt(ci, c); ci++;
+      }
+    });
+    branches.count = bi; crowns.count = ci;
+    trunks.castShadow = soft; branches.castShadow = soft; crowns.castShadow = soft;
+    group.add(trunks, branches, crowns);
+  }
+
+  // ================= 2C. 羽叶乔木（高干宽伞冠 + 大羽状复叶，疏林/林缘） =================
+  {
+    const pts = scatter(Math.round(112 * quality), { maxSpan: 4.2, spanR: 2.2 });
+    const trunkGeo = new THREE.CylinderGeometry(0.22, 0.42, 1, 9);
+    trunkGeo.translate(0, 0.5, 0);
+    const trunks = new THREE.InstancedMesh(trunkGeo, barkDark, pts.length);
+    const branchGeo = new THREE.CylinderGeometry(0.07, 0.2, 1, 6);
+    branchGeo.translate(0, 0.5, 0);
+    const branches = new THREE.InstancedMesh(branchGeo, barkDark, pts.length * 3);
+    // 冠：真实大羽叶卡（leaf_tree_b —— 雨豆树式巨羽复叶）
+    const crownGeo = cardGeo(0.18, 3);
+    const crowns = new THREE.InstancedMesh(crownGeo, leafMat(treeBTex(), { alphaTest: 0.4 }), pts.length * 6);
+    const c = new THREE.Color();
+    let bi = 0, ci = 0;
+    pts.forEach(([x, z], i) => {
+      const s = 0.9 + rng() * 0.6;
+      const th = (7 + rng() * 5) * s;
+      const y = footBase(x, z, 0.7 * s, 0.18);
+      const lean = (rng() - 0.5) * 0.04;
+      UP.position.set(x, y, z);
+      UP.scale.set(s, th, s);
+      UP.rotation.set(lean, rng() * 6.28, lean);
+      UP.updateMatrix();
+      trunks.setMatrixAt(i, UP.matrix);
+      colliders.push({ x, z, r: 0.55 * s, type: "feather" });
+      // 上部 3 主枝上翘撑开伞冠
+      for (let k = 0; k < 3 && bi < pts.length * 3; k++) {
+        const a = rng() * 6.283;
+        const tl = 0.9 + rng() * 0.3;
+        _v.set(Math.cos(a) * Math.sin(tl), Math.cos(tl), Math.sin(a) * Math.sin(tl)).normalize();
+        UP.position.set(x, y + th * (0.72 + rng() * 0.12), z);
+        UP.quaternion.setFromUnitVectors(YAX, _v);
+        UP.scale.set(s, (3.2 + rng() * 2.4) * s, s);
+        UP.updateMatrix();
+        branches.setMatrixAt(bi, UP.matrix); bi++;
+      }
+      // 宽扁伞冠：中部 4 张大羽叶卡 + 顶部 2 张近水平
+      const crownY = y + th * 0.92;
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * 6.283 + rng() * 0.9;
+        const rad = (1.4 + rng() * 1.2) * s;
+        const cw = (5 + rng() * 2.4) * s;
+        UP.position.set(x + Math.cos(a) * rad, crownY + (rng() - 0.4) * 1.4 * s, z + Math.sin(a) * rad);
+        UP.scale.set(cw, cw * (0.62 + rng() * 0.16), cw);
+        UP.rotation.set((rng() - 0.5) * 0.6, rng() * 6.283, (rng() - 0.5) * 0.4);
+        UP.updateMatrix();
+        crowns.setMatrixAt(ci, UP.matrix);
+        c.setHSL(0.26 + rng() * 0.04, 0.18 + rng() * 0.12, 0.72 + rng() * 0.16);
+        crowns.setColorAt(ci, c); ci++;
+      }
+      for (let k = 0; k < 2; k++) {
+        const a = rng() * 6.283;
+        const rad = (1.6 + rng() * 2) * s;
+        const cw = (6.5 + rng() * 2.6) * s;
+        UP.position.set(x + Math.cos(a) * rad, crownY + (1.4 + rng() * 1.4) * s, z + Math.sin(a) * rad);
+        UP.scale.set(cw, cw, cw);
+        UP.rotation.set(-Math.PI / 2 + (rng() - 0.5) * 0.45, rng() * 6.283, (rng() - 0.5) * 0.3);
+        UP.updateMatrix();
+        crowns.setMatrixAt(ci, UP.matrix);
+        c.setHSL(0.25 + rng() * 0.05, 0.16 + rng() * 0.10, 0.6 + rng() * 0.14);
+        crowns.setColorAt(ci, c); ci++;
+      }
+    });
+    branches.count = bi; crowns.count = ci;
+    trunks.castShadow = soft; branches.castShadow = soft; crowns.castShadow = soft;
+    group.add(trunks, branches, crowns);
+  }
+
   // ================= 3. 林下大叶植物（芭蕉/龟背竹） =================
   {
-    const pts = scatter(Math.round(1600 * quality), { nearTrail: true });
+    const pts = scatter(Math.round(2380 * quality), { nearTrail: true });
     const quad = new THREE.PlaneGeometry(1.55, 1.35);
     quad.translate(0, 0.62, 0);
     const g1 = mergeCross(quad);
@@ -432,7 +760,7 @@ export function buildFlora(scene, quality = 1) {
 
   // ================= 4. 灌木（矮叶簇） =================
   {
-    const pts = scatter(Math.round(760 * quality));
+    const pts = scatter(Math.round(1190 * quality));
     const geo = cardGeo(0.22, 3);
     const mesh = new THREE.InstancedMesh(geo, leafMat(canopyB, { alphaTest: 0.45 }), pts.length * 2);
     const c = new THREE.Color();
@@ -455,7 +783,7 @@ export function buildFlora(scene, quality = 1) {
 
   // ================= 5. 蕨类 =================
   {
-    const pts = [...scatter(Math.round(950 * quality), { nearTrail: true }), ...scatter(Math.round(180 * quality), { swampOK: true, zone: (x, z) => dist2(x, z, SWAMP.x, SWAMP.z) < 48 })];
+    const pts = [...scatter(Math.round(1375 * quality), { nearTrail: true }), ...scatter(Math.round(225 * quality), { swampOK: true, zone: (x, z) => dist2(x, z, SWAMP.x, SWAMP.z) < 60 })];
     const quad = new THREE.PlaneGeometry(1.5, 1.05);
     quad.translate(0, 0.52, 0);
     const geo = mergeCross(quad);
@@ -478,9 +806,10 @@ export function buildFlora(scene, quality = 1) {
 
   // ================= 6. 草丛（几何簇） =================
   {
-    const pts = scatter(Math.round(7200 * quality), { nearTrail: true });
+    const pts = scatter(Math.round(10250 * quality), { nearTrail: true });
     const geo = tuftGeo(10);
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, side: THREE.DoubleSide });
+    // 近景草丛也随风弯腰（不投影，省一次深度渲染）
+    const mat = applyWind(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, side: THREE.DoubleSide }));
     const mesh = new THREE.InstancedMesh(geo, mat, pts.length);
     const c = new THREE.Color();
     pts.forEach(([x, z], i) => {
@@ -504,7 +833,7 @@ export function buildFlora(scene, quality = 1) {
     quad.translate(0, -2.6, 0);   // 从上方垂下
     const geo = mergeCross(quad);
     const mat = leafMat(vineT, { alphaTest: 0.45 });
-    const n = Math.round(520 * quality);
+    const n = Math.round(775 * quality);
     const mesh = new THREE.InstancedMesh(geo, mat, n);
     const c = new THREE.Color();
     let i = 0;
@@ -527,7 +856,7 @@ export function buildFlora(scene, quality = 1) {
 
   // ================= 8. 地面落叶层 =================
   {
-    const pts = scatter(Math.round(3400 * quality), { nearTrail: true });
+    const pts = scatter(Math.round(5000 * quality), { nearTrail: true });
     const geo = new THREE.PlaneGeometry(1, 1);
     geo.rotateX(-Math.PI / 2);
     const mat = new THREE.MeshStandardMaterial({
@@ -552,7 +881,7 @@ export function buildFlora(scene, quality = 1) {
 
   // ================= 9. 岩石 =================
   {
-    const pts = scatter(Math.round(150 * quality));
+    const pts = scatter(Math.round(187 * quality));
     const extGeo = rockAssetGeo(); // rock.glb：原点=底部中心，高≈0.6×宽
     const geo = extGeo || jitterGeo(new THREE.DodecahedronGeometry(1, 0), 0.18);
     const mesh = new THREE.InstancedMesh(geo,
@@ -578,7 +907,7 @@ export function buildFlora(scene, quality = 1) {
       mesh.setMatrixAt(i, UP.matrix);
       c.setHSL(0.08 + rng() * 0.04, 0.06 + rng() * 0.05, 0.40 + rng() * 0.18);
       mesh.setColorAt(i, c);
-      colliders.push({ x, z, r: s * 0.82 });   // 小块石头也挡人（1m 宽的石头能穿人很假）
+      colliders.push({ x, z, r: s * 0.82, type: "rock" });   // 小块石头也挡人（1m 宽的石头能穿人很假）
     });
     mesh.castShadow = soft;
     mesh.receiveShadow = true;
@@ -587,7 +916,7 @@ export function buildFlora(scene, quality = 1) {
 
   // ================= 10. 倒木 =================
   {
-    const pts = scatter(Math.round(46 * quality), { nearTrail: true });
+    const pts = scatter(Math.round(57 * quality), { nearTrail: true });
     // 几何已沿 +X 躺倒，长度轴就是局部 X
     const geo = new THREE.CylinderGeometry(0.36, 0.5, 1, 9, 1);
     geo.rotateZ(-Math.PI / 2);
@@ -607,7 +936,7 @@ export function buildFlora(scene, quality = 1) {
       const la = UP.rotation.y, n = Math.max(2, Math.ceil(L / 1.0));
       for (let k = 0; k < n; k++) {
         const t = (n === 1 ? 0 : (k / (n - 1) - 0.5)) * (L - 0.9);
-        colliders.push({ x: x + Math.cos(la) * t, z: z - Math.sin(la) * t, r: 0.62 });
+        colliders.push({ x: x + Math.cos(la) * t, z: z - Math.sin(la) * t, r: 0.62, type: "log" });
       }
     });
     mesh.castShadow = soft;
@@ -619,7 +948,7 @@ export function buildFlora(scene, quality = 1) {
   {
     const sa = stumpAsset();
     if (sa) {
-      const pts = scatter(Math.round(34 * quality), { nearTrail: true });
+      const pts = scatter(Math.round(42 * quality), { nearTrail: true });
       const mesh = new THREE.InstancedMesh(sa.geo, sa.mat, pts.length);
       pts.forEach(([x, z], i) => {
         const s = 0.65 + rng() * 1.05;
@@ -629,7 +958,7 @@ export function buildFlora(scene, quality = 1) {
         UP.rotation.set((rng() - 0.5) * 0.1, rng() * 6.28, (rng() - 0.5) * 0.1);
         UP.updateMatrix();
         mesh.setMatrixAt(i, UP.matrix);
-        colliders.push({ x, z, r: s * 0.85 });   // 小断桩也挡人（最宽 2.2×0.65≈1.4m，穿过去很假）
+        colliders.push({ x, z, r: s * 0.85, type: "stump" });   // 小断桩也挡人（最宽 2.2×0.65≈1.4m，穿过去很假）
       });
       mesh.castShadow = soft;
       mesh.receiveShadow = true;
@@ -643,7 +972,7 @@ export function buildFlora(scene, quality = 1) {
 
 // ---------- 沼泽区：枯树 + 芦苇 + 藻斑 ----------
 function buildSwamp(group, bark, soft) {
-  const pts = scatter(Math.round(52), { swampOK: true, zone: (x, z) => { const d = dist2(x, z, SWAMP.x, SWAMP.z); return d < 46 && d > 16; } });
+  const pts = scatter(Math.round(65), { swampOK: true, zone: (x, z) => { const d = dist2(x, z, SWAMP.x, SWAMP.z); return d < 57.5 && d > 20; } });
   const deadMat = new THREE.MeshStandardMaterial({ map: bark, color: 0x8c8474, roughness: 1 });
   for (const [x, z] of pts) {
     const y = footBase(x, z, 0.45, 0.12);   // 枯树干也是平底，按裙边最低点埋
@@ -663,18 +992,18 @@ function buildSwamp(group, bark, soft) {
     g0.rotation.set((rng() - 0.5) * 0.14, rng() * 6.28, (rng() - 0.5) * 0.14);
     g0.castShadow = soft;
     group.add(g0);
-    colliders.push({ x, z, r: 0.4 });
+    colliders.push({ x, z, r: 0.4, type: "dead" });
   }
   // 芦苇
   const reedGeo = new THREE.ConeGeometry(0.06, 1.9, 4);
   reedGeo.translate(0, 0.95, 0);
   const reeds = new THREE.InstancedMesh(reedGeo,
-    new THREE.MeshStandardMaterial({ color: 0x6f7d3e, roughness: 1 }), 280);
+    applyWind(new THREE.MeshStandardMaterial({ color: 0x6f7d3e, roughness: 1 })), 280);
   let ri = 0;
   for (let i = 0; i < 320 && ri < 280; i++) {
-    const a = rng() * 6.283, rr = 18 + rng() * 30;
+    const a = rng() * 6.283, rr = 22.5 + rng() * 37.5;
     const x = SWAMP.x + Math.cos(a) * rr, z = SWAMP.z + Math.sin(a) * rr;
-    if (Math.abs(x - 86) < 3) continue;
+    if (Math.abs(x - SWAMP.x) < 3.75) continue;
     const y = terrainY(x, z);
     if (y > CFG.SWAMP_Y + 0.7) continue;
     const s = 0.7 + rng() * 0.9;
@@ -690,9 +1019,9 @@ function buildSwamp(group, bark, soft) {
     new THREE.MeshStandardMaterial({ color: 0x63722f, roughness: 1, transparent: true, opacity: 0.55 }), 66);
   let ai = 0;
   for (let i = 0; i < 130 && ai < 66; i++) {
-    const a = rng() * 6.283, rr = 6 + rng() * 34;
+    const a = rng() * 6.283, rr = 7.5 + rng() * 42.5;
     const x = SWAMP.x + Math.cos(a) * rr, z = SWAMP.z + Math.sin(a) * rr;
-    if (Math.abs(x - 86) < 2.2) continue;
+    if (Math.abs(x - SWAMP.x) < 2.75) continue;
     UP.position.set(x, CFG.SWAMP_Y + 0.03, z);
     const s = 1 + rng() * 3.4;
     UP.scale.set(s, s * (0.6 + rng() * 0.5), s);
@@ -708,25 +1037,25 @@ function buildBeachProps(parent, bark, rockT, grassT) {
   const group = parent;
   const drift = new THREE.InstancedMesh(
     new THREE.CylinderGeometry(0.16, 0.24, 1, 6).rotateZ(Math.PI / 2),
-    new THREE.MeshStandardMaterial({ map: bark, color: 0xb0a084, roughness: 1 }), 70);
+    new THREE.MeshStandardMaterial({ map: bark, color: 0xb0a084, roughness: 1 }), 87);
   const pebGeo = rockAssetGeo();
   const pebble = new THREE.InstancedMesh(
     pebGeo || new THREE.DodecahedronGeometry(1, 0),
-    new THREE.MeshStandardMaterial({ map: rockT, color: 0xc8c0b0, roughness: 0.95 }), 90);
+    new THREE.MeshStandardMaterial({ map: rockT, color: 0xc8c0b0, roughness: 0.95 }), 112);
   const beachGrass = new THREE.InstancedMesh(
     mergeCross((() => { const q = new THREE.PlaneGeometry(1.0, 0.8); q.translate(0, 0.4, 0); return q; })()),
-    leafMat(grassT, { alphaTest: 0.3 }), 320);
+    leafMat(grassT, { alphaTest: 0.3 }), 400);
   const c = new THREE.Color();
   let di = 0, pi = 0, gi = 0;
-  for (let i = 0; i < 2600 && (di < 70 || pi < 90 || gi < 320); i++) {
-    const a = rng() * 6.283, rr = 188 + rng() * 40;
+  for (let i = 0; i < 3300 && (di < 87 || pi < 112 || gi < 400); i++) {
+    const a = rng() * 6.283, rr = 235 + rng() * 50;
     const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
     const h = terrainY(x, z);   // 沙滩杂物同样按渲染网格落位
     if (h < 1.0 || h > 3.6) continue;
-    if (trailDist(x, z) < 4) continue;
-    if (dist2(x, z, SPAWN.x, SPAWN.z) < 10 || dist2(x, z, RAFT.x, RAFT.z) < 12) continue;
+    if (trailDist(x, z) < 5) continue;
+    if (dist2(x, z, SPAWN.x, SPAWN.z) < 12.5 || dist2(x, z, RAFT.x, RAFT.z) < 15) continue;
     const pick = rng();
-    if (pick < 0.22 && di < 70) {
+    if (pick < 0.22 && di < 87) {
       const L = 1.4 + rng() * 3.4;
       const yaw = rng() * 6.28, tilt = (rng() - 0.5) * 0.12;
       // 浮木是躺倒的长条：两端各取一次地面高度，按低的一端落位，免得起翘
@@ -737,13 +1066,13 @@ function buildBeachProps(parent, bark, rockT, grassT) {
       UP.rotation.set(0, yaw, tilt);
       UP.updateMatrix();
       drift.setMatrixAt(di++, UP.matrix);
-    } else if (pick < 0.5 && pi < 90) {
+    } else if (pick < 0.5 && pi < 112) {
       const s = 0.1 + rng() * 0.34;
       if (pebGeo) { UP.position.set(x, h - s * 0.15, z); UP.scale.set(s, s * (0.8 + rng() * 0.3), s); }
       else { UP.position.set(x, h + s * 0.3, z); UP.scale.set(s, s * 0.7, s); }
       UP.rotation.set(rng() * 3, rng() * 6, rng() * 3); UP.updateMatrix();
       pebble.setMatrixAt(pi++, UP.matrix);
-    } else if (gi < 320) {
+    } else if (gi < 400) {
       const s = 0.5 + rng() * 0.6;
       UP.position.set(x, h - 0.02, z); UP.scale.set(s, s * 0.9, s);
       UP.rotation.set(0, rng() * 6.28, 0); UP.updateMatrix();

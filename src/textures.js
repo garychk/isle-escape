@@ -241,6 +241,112 @@ export function barkNormal() {
   });
 }
 
+// ---------- 椰树树干（横向叶痕环纹 —— 椰树最强识别特征） ----------
+export function coconutBarkTex() {
+  return tex('coconutBark', 256, 512, (g, w, h) => {
+    g.fillStyle = '#8b7d66'; g.fillRect(0, 0, w, h);
+    // 横向环纹（叶痕）+ 环下亮棱
+    for (let y = 6; y < h; y += 16 + rnd() * 14) {
+      const v = 58 + rnd() * 46 | 0;
+      g.strokeStyle = `rgba(${v},${v * 0.86 | 0},${v * 0.68 | 0},${0.4 + rnd() * 0.32})`;
+      g.lineWidth = 2.4 + rnd() * 3.2;
+      g.beginPath();
+      g.moveTo(-4, y);
+      for (let x = 0; x <= w + 4; x += 14) g.lineTo(x, y + Math.sin(x * 0.05 + y) * 2.2 + (rnd() - 0.5) * 2);
+      g.stroke();
+      g.strokeStyle = `rgba(196,182,152,${0.14 + rnd() * 0.14})`;
+      g.lineWidth = 1.6;
+      g.beginPath();
+      g.moveTo(-4, y + 3.2);
+      for (let x = 0; x <= w + 4; x += 18) g.lineTo(x, y + 3.2 + Math.sin(x * 0.045 + y) * 2);
+      g.stroke();
+    }
+    // 纵向浅裂
+    for (let i = 0; i < 60; i++) {
+      const x = rnd() * w, y0 = rnd() * h, l = 20 + rnd() * 90;
+      g.strokeStyle = `rgba(${70 + rnd() * 40 | 0},${62 + rnd() * 34 | 0},${48 + rnd() * 26 | 0},${0.14 + rnd() * 0.2})`;
+      g.lineWidth = 0.8 + rnd() * 1.4;
+      g.beginPath(); g.moveTo(x, y0); g.lineTo(x + (rnd() - 0.5) * 6, y0 + l); g.stroke();
+    }
+    // 雨渍
+    for (let i = 0; i < 26; i++) {
+      const x = rnd() * w;
+      const grd = g.createLinearGradient(x, 0, x + 12, 0);
+      grd.addColorStop(0, 'rgba(30,26,20,0)');
+      grd.addColorStop(0.5, `rgba(30,26,20,${0.08 + rnd() * 0.12})`);
+      grd.addColorStop(1, 'rgba(30,26,20,0)');
+      g.fillStyle = grd; g.fillRect(x, 0, 14, h);
+    }
+    // 苔斑（基部更重）
+    for (let i = 0; i < 40; i++) {
+      const x = rnd() * w, y = h * 0.55 + rnd() * h * 0.45, r = 5 + rnd() * 16;
+      const grd = g.createRadialGradient(x, y, 0, x, y, r);
+      grd.addColorStop(0, `rgba(${52 + rnd() * 26 | 0},${76 + rnd() * 30 | 0},${40 + rnd() * 18 | 0},${0.10 + rnd() * 0.18})`);
+      grd.addColorStop(1, 'rgba(56,80,40,0)');
+      g.fillStyle = grd; g.beginPath(); g.arc(x, y, r, 0, 6.283); g.fill();
+    }
+  }, 1);
+}
+
+// ---------- 橡胶树皮（灰白平滑 + 皮孔 + 割胶螺旋痕） ----------
+export function rubberBarkTex() {
+  return tex('rubberBark', 256, 512, (g, w, h) => {
+    g.fillStyle = '#9d988c'; g.fillRect(0, 0, w, h);
+    // 大片平滑斑驳（灰白/灰褐）
+    for (let i = 0; i < 90; i++) {
+      const x = rnd() * w, y = rnd() * h, r = 10 + rnd() * 44;
+      const grd = g.createRadialGradient(x, y, 0, x, y, r);
+      const light = rnd() < 0.6;
+      grd.addColorStop(0, light
+        ? `rgba(${168 + rnd() * 30 | 0},${164 + rnd() * 28 | 0},${150 + rnd() * 26 | 0},${0.14 + rnd() * 0.2})`
+        : `rgba(${108 + rnd() * 26 | 0},${104 + rnd() * 24 | 0},${96 + rnd() * 22 | 0},${0.12 + rnd() * 0.18})`);
+      grd.addColorStop(1, 'rgba(120,116,108,0)');
+      g.fillStyle = grd; g.beginPath(); g.arc(x, y, r, 0, 6.283); g.fill();
+    }
+    // 细纵纹（很浅，橡胶树皮比雨林树平滑得多）
+    for (let i = 0; i < 110; i++) {
+      const x = rnd() * w, y0 = rnd() * h, l = 14 + rnd() * 60;
+      g.strokeStyle = `rgba(${96 + rnd() * 40 | 0},${92 + rnd() * 36 | 0},${84 + rnd() * 30 | 0},${0.10 + rnd() * 0.16})`;
+      g.lineWidth = 0.7 + rnd() * 1.2;
+      g.beginPath(); g.moveTo(x, y0); g.lineTo(x + (rnd() - 0.5) * 4, y0 + l); g.stroke();
+    }
+    // 横向皮孔（橡胶树特征小凸痕）
+    for (let i = 0; i < 150; i++) {
+      const x = rnd() * w, y = rnd() * h, l = 2 + rnd() * 7;
+      g.strokeStyle = `rgba(${70 + rnd() * 30 | 0},${66 + rnd() * 28 | 0},${60 + rnd() * 24 | 0},${0.22 + rnd() * 0.3})`;
+      g.lineWidth = 0.8 + rnd() * 1.2;
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x + l, y + (rnd() - 0.5) * 2); g.stroke();
+    }
+    // 割胶螺旋痕（斜向浅槽 + 下缘阴影）
+    for (let s = 0; s < 2; s++) {
+      const y0 = h * (0.28 + s * 0.36) + rnd() * 30;
+      g.strokeStyle = `rgba(212,206,192,${0.5 + rnd() * 0.2})`;
+      g.lineWidth = 5 + rnd() * 3;
+      g.beginPath();
+      g.moveTo(-4, y0 + 30);
+      g.quadraticCurveTo(w * 0.5, y0 - 14, w + 4, y0 + 22);
+      g.stroke();
+      g.strokeStyle = 'rgba(84,80,72,0.4)';
+      g.lineWidth = 1.4;
+      g.beginPath();
+      g.moveTo(-4, y0 + 33);
+      g.quadraticCurveTo(w * 0.5, y0 - 11, w + 4, y0 + 25);
+      g.stroke();
+    }
+  }, 1);
+}
+
+// ---------- 真实叶卡：阔叶（leaf_tree_a）/ 羽状复叶（leaf_tree_b） ----------
+//   由 pbr.js 注入 override；文件缺失时回退程序化冠簇，游戏照常
+export function treeATex() {
+  if (overrides.treeA) return overrides.treeA;
+  return canopyTex(1);
+}
+export function treeBTex() {
+  if (overrides.treeB) return overrides.treeB;
+  return canopyTex(0);
+}
+
 // ---------- 树冠叶簇卡片（雨林：大量单叶组成的不规则团块） ----------
 export function canopyTex(variant = 0) {
   return tex('canopy' + variant, 512, 512, (g, w, h) => {

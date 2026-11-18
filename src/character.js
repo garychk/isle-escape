@@ -872,13 +872,9 @@ export class Character {
       return;
     }
 
-    // 2) 刚停下：收脚动作。淡入放缓，避免站姿在一帧里被换掉
+    // 2) 刚停下：不播收脚动作，直接淡入待机站姿
     if (this._wasMoving) {
       this._wasMoving = false;
-      if (has('stop_walk') && this.play('stop_walk', 0.18, true)) {
-        this._unShot = 'stop_walk';
-        return;
-      }
     }
 
     // 3) 原地转身：只有明显的转头/转身才播迈步动作（原阈值 0.012 rad≈0.7° 太低，

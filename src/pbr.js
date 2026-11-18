@@ -45,9 +45,10 @@ export async function loadPBR(onStep) {
 
   // 植被 RGBA（不需要平铺，用 ClampToEdge）
   const foliage = {};
-  // 只加载 textures.js 已接入 override 的三张；leaf_shrub/tree_a/tree_b 留在 tex/ 备用
+  // 只加载 textures.js 已接入 override 的五张；leaf_shrub 留在 tex/ 备用
   const foliageFiles = {
     grass: 'leaf_grass.png', fern: 'leaf_fern.png', litter: 'leaf_litter.png',
+    treeA: 'leaf_tree_a.png', treeB: 'leaf_tree_b.png',
   };
   await Promise.all(Object.entries(foliageFiles).map(async ([k, f]) => {
     const t = await new Promise(resolve => {

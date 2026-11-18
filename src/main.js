@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { CFG, SPAWN } from './config.js';
 import { buildTerrain, buildWaters, setWaterEnv, updateWaters, zoneState, groundHeight, waterDistance } from './terrain.js';
-import { buildFlora, colliders } from './flora.js';
+import { buildFlora, colliders, updateFoliageWind, foliageWindState, setFoliageWindEnabled } from './flora.js';
 import { buildStructures, bridgeState, bridgePlanks, updateRaft, reefState } from './structures.js';
 import { BeastManager, makeParticles, updateParticles } from './animals.js';
 import { Env } from './env.js';
@@ -13,8 +13,9 @@ import { TPS } from './tps.js';
 import { loadAssets, setAssetEnv } from './assets.js';
 import { loadPBR, applyTerrainPBR, loadSkyEnv } from './pbr.js';
 import { setTextureOverride } from './textures.js';
-import { loadWaterTextures, bindWaterEnv, waterState } from './water.js';
-import { resume, startAmbient, startBGM, setCombat, setCaveAmbience, setRain, setWaterNear, waterAmbState, thunder, sfx, bgmState, sfxState, engineState } from './audio.js';
+import { loadWaterTextures, bindWaterEnv, waterState, setWavesEnabled, setWaterFrozen } from './water.js';
+import { resume, startAmbient, startBGM, setCombat, setCaveAmbience, setRain, setWaterNear, waterAmbState, thunder, sfx, bgmState, sfxState, engineState, startWildlifeAudio, setWildlifeContext, wildlifeAudioState, debugWildlifeCall } from './audio.js';
+import { buildWildlife, wildlifeState, wildlifeCallPoint } from './wildlife.js';
 import { clamp } from './util.js';
 
 const canvas = document.getElementById('view');
@@ -34,6 +35,10 @@ renderer.toneMappingExposure = 1.0;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
+
+// QA/调试隔离开关：?nowind=1 静止树叶，?nowaves=1 关掉 Gerstner 浪
+const QS = new URLSearchParams(location.search);
+const fxOn = { wind: !QS.has('nowind'), waves: !QS.has('nowaves') };
 
 // 环境系统：天空、昼夜、天气、雨、萤火虫
 const env = new Env({ scene, renderer });
@@ -63,7 +68,7 @@ scene.add(camera);
 // —— 世界构建（分步展示进度） ——
 const bootFill = document.getElementById('boot-fill');
 const bootMsg = document.getElementById('boot-msg');
-let player, beasts, ui, particles, tps, quests;
+let player, beasts, ui, particles, tps, quests, wildlife;
 let state = 'title';
 let playTime = 0;
 let bridgeImpulse = 0;
@@ -87,6 +92,7 @@ async function boot() {
   pbrState.ground = !qs.has('noground') && applyTerrainPBR(terrain, pbr.ground);
   env.terrainMat = terrain.material;
   await loadWaterTextures(qs.has('nowater'));   // ?nowater 强制回退程序化法线，便于前后对比
+  setWavesEnabled(fxOn.waves);
   buildWaters(scene);
   rebuildEnvMap();
   setAssetEnv(envTex);
@@ -102,6 +108,9 @@ async function boot() {
   await step('正在架设索桥与洞穴', 66);
   buildStructures(scene);
   particles = makeParticles(scene);
+  await step('正在放归林间野生动物', 80);
+  // 环境生态（蜥蜴/蛇/陆龟/鳄 + 鸟群）与敌对野兽完全分离，?nowildlife=1 可整体关闭
+  wildlife = qs.has('nowildlife') ? null : buildWildlife(scene);
   await step('正在唤醒林中野兽', 86);
   beasts = new BeastManager(scene);
   beasts.spawnAll();
@@ -117,6 +126,8 @@ async function boot() {
   await step('准备出发', 100);
   startAmbient();
   startBGM();
+  // 鸟叫/兽吼音景：声源坐标直接取自画面里的动物（wildlife.js）
+  startWildlifeAudio(kind => wildlifeCallPoint(kind));
   document.getElementById('boot').classList.add('done');
   ui.showMenu('menu-title');
   if (location.search.indexOf('auto=1') >= 0) {
@@ -199,8 +210,22 @@ window.__qa = {
   bgm: bgmState,
   sfx: sfxState,
   water: waterState,
+  foliage: foliageWindState,
+  // QA：同机位实时开关风与浪（树叶静止 + 浪归零），供像素差对照
+  setFx(v) {
+    fxOn.wind = fxOn.waves = !!v;
+    setFoliageWindEnabled(fxOn.wind);
+    setWavesEnabled(fxOn.waves);
+    setWaterFrozen(!v);   // QA 对照组：水面时间一并冻结，关组画面完全静止
+    return { foliage: foliageWindState(), water: waterState() };
+  },
+  // QA：只推进风/浪相位 s 秒（相机/角色/环境全部不动）
+  timeSkip(s) { qaFxTime += s; return qaFxTime; },
   waterAmb: waterAmbState,
   reef: reefState,
+  wildlife: wildlifeState,
+  wildlifeAudio: wildlifeAudioState,
+  wildlifeCall: debugWildlifeCall,
   waterTest: (lv) => setWaterNear(lv),
   shore: (x, z) => waterDistance(x == null ? player.pos.x : x, z == null ? player.pos.z : z),
   colliders: () => colliders,
@@ -274,12 +299,18 @@ let lastT = performance.now();
 let caveBlend = 0;
 let lastCombatT = -99;
 let waterProbeT = 0;
+// QA：只推进风/浪相位的偏移（timeSkip），不动相机/物理/环境，供像素差对照
+let qaFxTime = 0;
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
-  const dt = Math.min(0.05, (now - lastT) / 1000);
+  // 系统时钟回拨 / QA 虚拟时钟下 (now-lastT) 可能为负，钳到 0 避免时间倒流
+  const dt = Math.max(0, Math.min(0.05, (now - lastT) / 1000));
   lastT = now;
   const t = now / 1000;
+  const tfx = t + qaFxTime;
+  // 风场每帧驱动叶片顶点着色器；风力/风向来自环境（雨天更大、夜间略收）
+  updateFoliageWind(tfx, env, fxOn.wind);
 
   updateRaft(t);
   if (particles) updateParticles(dt);
@@ -341,9 +372,27 @@ function loop() {
   else setWaterNear(0);        // 标题 / 暂停 / 结算：水流声淡出
   // 环境：昼夜 + 天气（内部处理天穹跟随、光照、雾、雨）
   env.update(dt, camera.position, caveBlend);
+  // 野生动物与它们的叫声共用同一份「本帧」昼夜/天气/玩家状态；
+  // 标题画面也保持生态在动（鸟群盘旋、蜥蜴趴着晒太阳），只是不触发音景。
+  const wildlifeRef = player ? player.pos : { x: SPAWN.x, y: 3, z: SPAWN.z };
+  if (wildlife) wildlife.update(dt, t, wildlifeRef, env);
+  // 相机世界矩阵用于音景的左右声像；这里必须每帧同步，不能用累加 dt 节流——
+  // 无头软渲染一帧可能长达数秒而 dt 被 clamp 到 0.05，累加节流会慢上十几秒一拍。
+  camera.updateMatrixWorld();
+  {
+    const e = camera.matrixWorld.elements;
+    const rr = Math.hypot(wildlifeRef.x, wildlifeRef.z);
+    setWildlifeContext({
+      night: env.night, rain: env.rain, cave: zoneState(wildlifeRef.x, wildlifeRef.z).cave,
+      shore: clamp((rr - 176) / 50, 0, 1),
+      px: wildlifeRef.x, pz: wildlifeRef.z,
+      right: [e[0], e[2]],           // 相机世界右向量，用于精确的左右声像
+      listening: state === 'playing',
+    });
+  }
   // 水面太阳高光必须读本帧的最新光源；放在 env.update 之前会滞后一帧，
   // 低帧率/无头软渲染下会整整卡住一拍（日落仍是白天的太阳）
-  updateWaters(t);
+  updateWaters(tfx);
   // HDRI 是静态白昼天空，夜间必须压低 IBL 强度，否则会破坏昼夜循环
   if (pbrState.env) scene.environmentIntensity = 0.10 + (1 - env.night) * 0.48;
   renderer.render(scene, camera);

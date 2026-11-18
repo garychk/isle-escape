@@ -5,70 +5,85 @@ import { fbm, clamp, smoothstep, dist2, segDist2 } from './util.js';
 import { groundDetail, groundNormal } from './textures.js';
 import { createWaterMaterial, setWaterTime } from './water.js';
 
-const R_ISLAND = 232, R_COAST = 198; // 岛屿半径 / 海岸线开始
+const R_ISLAND = 290, R_COAST = 247.5; // 岛屿半径 / 海岸线开始（2026-11-18 平面 ×1.25）
+const EXTRA_POOLS = [
+  { x: 82.5, z: -165, r: 35, y: 5.6, depth: 3.4, w: 72.5, d: 67.5 },
+  { x: 126.25, z: -102.5, r: 28.75, y: 4.7, depth: 2.7, w: 60, d: 57.5 },
+  { x: 68.75, z: -35, r: 33.75, y: 3.8, depth: 2.4, w: 70, d: 62.5 },
+  { x: 135, z: 32.5, r: 38.75, y: 3.2, depth: 1.9, w: 80, d: 72.5 },
+];
 
 // —— 基础地形高度（不含桥/木板/洞穴覆盖） ——
 export function baseHeight(x, z) {
   const r = dist2(x, z, 0, 0);
   // 大陆轮廓：内岛抬高 → 沙滩环 → 海床
-  const coast = smoothstep(248, 236, r);
+  const coast = smoothstep(310, 295, r);
   let h = -13 + 15 * coast;
-  h += 3.2 * smoothstep(205, 165, r);                        // 内陆基底抬升
-  h += fbm(x * 0.011, z * 0.011, 4) * (2.5 + 9 * smoothstep(210, 130, r)); // 丘陵起伏
+  h += 3.2 * smoothstep(256, 206, r);                        // 内陆基底抬升
+  h += fbm(x * 0.011, z * 0.011, 4) * (2.5 + 9 * smoothstep(262, 162, r)); // 丘陵起伏
   h += fbm(x * 0.05, z * 0.05, 3) * 1.1;
   // 山体（洞穴所在）：主峰 + 次级山脊
   const dm = dist2(x, z, MOUNT.x, MOUNT.z);
-  const mf = 1 - smoothstep(48, 84, dm);
+  const mf = 1 - smoothstep(60, 105, dm);
   const ridge = 1 - Math.abs(fbm(x * 0.028 + 3, z * 0.028 - 7, 3)) * 2;
   h += (40 + ridge * 16 + fbm(x * 0.055, z * 0.055, 3) * 12) * mf * mf;
-  h += 16 * Math.max(0, 1 - smoothstep(0, 34, dm)) * (0.7 + fbm(x * 0.09, z * 0.09, 2) * 0.6);
+  h += 16 * Math.max(0, 1 - smoothstep(0, 42.5, dm)) * (0.7 + fbm(x * 0.09, z * 0.09, 2) * 0.6);
   // 山体侵蚀沟壑：打散过于光滑的锥体轮廓
   h += (fbm(x * 0.115, z * 0.115, 4) * 8.5 + fbm(x * 0.29, z * 0.29, 2) * 2.6) * mf;
   // 山腹隧道开凿（贯穿山体，供洞穴通行）
-  if (Math.abs(x) < 12 && z < -44 && z > -180) {
-    const cx = smoothstep(11, 6.4, Math.abs(x));
-    const czm = smoothstep(-44, -54, z) * smoothstep(-180, -170, z);
+  if (Math.abs(x) < 15 && z < -55 && z > -225) {
+    const cx = smoothstep(13.75, 8, Math.abs(x));
+    const czm = smoothstep(-55, -67.5, z) * smoothstep(-225, -212.5, z);
     const c = cx * czm;
     if (c > 0) h = h * (1 - c) + (CFG.CAVE_Y - 0.5 + fbm(x * 0.09, z * 0.09, 2) * 0.35) * c;
   }
-  // 断魂谷峡谷（东西走向，z=-6）
-  const dzr = Math.abs(z + 6);
-  if (dzr < 32 && Math.abs(x) < 108) {
-    const carve = smoothstep(32, 10, dzr);
+  // 断魂谷峡谷（东西走向）
+  const dzr = Math.abs(z + 7.5);
+  if (dzr < 40 && Math.abs(x) < 135) {
+    const carve = smoothstep(40, 12.5, dzr);
     h = h * (1 - carve) + (-9.5 + fbm(x * 0.1, z * 0.1, 2) * 0.9) * carve;
-    h = h * (1 - smoothstep(28, 20, dzr)) + 6.2 * smoothstep(28, 20, dzr); // 谷缘抬平
+    h = h * (1 - smoothstep(35, 25, dzr)) + 6.2 * smoothstep(35, 25, dzr); // 谷缘抬平
+  }
+  // 东侧低洼水潭群：用多个不规则盆地取代人工溪流，水面严格由盆地边缘承托。
+  for (const p of EXTRA_POOLS) {
+    const d = dist2(x, z, p.x, p.z);
+    if (d < p.r) {
+      const basin = smoothstep(p.r, p.r * 0.34, d);
+      const floor = p.y - p.depth + fbm(x * 0.11 + p.x, z * 0.11 - p.z, 2) * 0.22;
+      h = h * (1 - basin) + floor * basin;
+    }
   }
   // 水塘凹陷
   const dp = dist2(x, z, POND.x, POND.z);
-  if (dp < 42) { const c = smoothstep(42, 18, dp); h = h * (1 - c) + (0.9 + fbm(x * 0.08, z * 0.08, 2) * 0.5) * c; }
+  if (dp < 52.5) { const c = smoothstep(52.5, 22.5, dp); h = h * (1 - c) + (0.9 + fbm(x * 0.08, z * 0.08, 2) * 0.5) * c; }
   // 沼泽压平
   const ds = dist2(x, z, SWAMP.x, SWAMP.z);
-  if (ds < 52) { const c = smoothstep(52, 26, ds); h = h * (1 - c) + (2.1 + fbm(x * 0.06, z * 0.06, 2) * 0.35) * c; }
-  // 沙滩：从内陆缓坡一路降到海水线以下，形成真正的岸线（湿沙带在 r≈211）
-  if (r > 178) {
-    const c = smoothstep(178, 198, r) * (1 - smoothstep(240, 262, r));
-    const beach = 2.4 - smoothstep(196, 240, r) * 6.6;
-    const ripple = (1 - smoothstep(196, 216, r)) * 0.6 * fbm(x * 0.06, z * 0.06, 2);
+  if (ds < 65) { const c = smoothstep(65, 32.5, ds); h = h * (1 - c) + (2.1 + fbm(x * 0.06, z * 0.06, 2) * 0.35) * c; }
+  // 沙滩：从内陆缓坡一路降到海水线以下，形成真正的岸线（湿沙带在 r≈264）
+  if (r > 222.5) {
+    const c = smoothstep(222.5, 247.5, r) * (1 - smoothstep(300, 327.5, r));
+    const beach = 2.4 - smoothstep(245, 300, r) * 6.6;
+    const ripple = (1 - smoothstep(245, 270, r)) * 0.6 * fbm(x * 0.06, z * 0.06, 2);
     h = h * (1 - c) + (beach + ripple) * c;
   }
   // 南岸出生地压平
   const dsp = dist2(x, z, SPAWN.x, SPAWN.z);
-  if (dsp < 20) { const c = smoothstep(20, 8, dsp); h = h * (1 - c) + 2.3 * c; }
+  if (dsp < 25) { const c = smoothstep(25, 10, dsp); h = h * (1 - c) + 2.3 * c; }
   // 林中木屋空地压平（地基平台）
   const dc = dist2(x, z, CABIN.x, CABIN.z);
-  if (dc < 24) { const c = smoothstep(24, 12, dc); h = h * (1 - c) + CABIN.padY * c; }
+  if (dc < 30) { const c = smoothstep(30, 15, dc); h = h * (1 - c) + CABIN.padY * c; }
   // 北岸筏点：挖出一处浅湾，让救生筏真正浮在水面上
   const dr = dist2(x, z, RAFT.x, RAFT.z);
-  if (dr < 22) {
-    const c = smoothstep(22, 9, dr);
+  if (dr < 27.5) {
+    const c = smoothstep(27.5, 11.25, dr);
     h = h * (1 - c) + (-1.15 + fbm(x * 0.14, z * 0.14, 2) * 0.22) * c;
   }
   return h;
 }
 
-// 洞穴走廊覆盖（山腹隧道，x∈±8, z∈-172..-50）
-export function inCaveCorr(x, z) { return Math.abs(x) < 9 && z < -46 && z > -176; }
-export function inCaveDark(x, z) { return Math.abs(x) < 10 && z < -58 && z > -164; }
+// 洞穴走廊覆盖（山腹隧道，x∈±11, z∈-220..-57.5）
+export function inCaveCorr(x, z) { return Math.abs(x) < 11.25 && z < -57.5 && z > -220; }
+export function inCaveDark(x, z) { return Math.abs(x) < 12.5 && z < -72.5 && z > -205; }
 
 // —— 可站立面注册（结构物地板 / 门廊 / 坡道楼梯等） ——
 // rects: {x0,x1,z0,z1,y,minY} 常高平台；ramps: {x0,x1,z0,z1,ax0,ay0,ax1,ay1} 沿 x 线性坡
@@ -97,9 +112,9 @@ function surfaceHeight(x, z, curY = Infinity) {
 export function groundHeight(x, z, bridgeSway = 0, curY = Infinity) {
   let h = baseHeight(x, z);
   // 索桥桥面
-  if (Math.abs(x) < 2.6 && z < 16 && z > -28) h = CFG.BRIDGE_Y + bridgeSway;
+  if (Math.abs(x) < 3.25 && z < 20 && z > -35) h = CFG.BRIDGE_Y + bridgeSway;
   // 沼泽木板路
-  else if (Math.abs(x - 86) < 2.4 && z < 96 && z > 10) h = Math.max(baseHeight(x, z), CFG.SWAMP_Y + 0.55);
+  else if (Math.abs(x - SWAMP.x) < 2.4 && z < 120 && z > 13) h = Math.max(baseHeight(x, z), CFG.SWAMP_Y + 0.55);
   // 北岸栈桥（尾端压到渔船甲板边缘）
   else if (Math.abs(x - (RAFT.x - 2.4)) < 1.02 && z < RAFT.z + 12.6 && z > RAFT.z - 1.0) h = 0.96;
   // 洞底
@@ -114,7 +129,7 @@ export function groundHeight(x, z, bridgeSway = 0, curY = Infinity) {
 // 地面网格是 230 段平面片，顶点精确、片内线性插值；baseHeight 在 2.43m 一格的
 // 噪声地形上最多能差 4m（隧道口那条窄沟尤其夸张）。所有"贴着地面摆"的物体
 // （树/石头/断桩/浮木）都必须用它定位，否则坡地和沟沿会明显悬空或半埋。
-const GRID_SEG = 230;
+const GRID_SEG = 270;
 const GRID_STEP = CFG.WORLD / GRID_SEG;
 const GRID_HALF = CFG.WORLD / 2;
 export const TERRAIN_SEG = GRID_SEG;
@@ -247,7 +262,9 @@ function ds_(x, z) { return dist2(x, z, SWAMP.x, SWAMP.z); }
 
 // —— 水面：先按真实地形高度烘焙水深图，再由 water.js 做波纹/深浅/泡沫 ——
 // 水深图是让"平面水"显出浅滩、岸线白沫和水色层次的关键（纯贴图做不到）。
-function depthMap(w, d, cx, cz, y, scale, res) {
+// basinR：盆地区半径，烘焙进 alpha 通道。水面矩形往往比挖了盆地的范围大，
+// 超出盆地的部分盖在陆地起伏上会凭空浮出一层水（悬空水），掩码把它们直接透明掉。
+function depthMap(w, d, cx, cz, y, scale, res, basinR) {
   const data = new Uint8Array(res * res * 4);
   for (let j = 0; j < res; j++) {
     const z = cz + (j / (res - 1) - 0.5) * d;
@@ -256,7 +273,12 @@ function depthMap(w, d, cx, cz, y, scale, res) {
       const v = clamp((y - baseHeight(x, z)) / scale, 0, 1);
       const k = (j * res + i) * 4;
       data[k] = data[k + 1] = data[k + 2] = (v * 255) | 0;
-      data[k + 3] = 255;
+      // 盆地掩码：盆区内 = 1，超出盆地半径 ±4% 平滑过渡到 0（海面不传 basinR 则全 1）。
+      // 渐隐带宽要窄：掠射角下宽渐隐带会像一块灰板浮在林地上。
+      const m = basinR
+        ? 1 - smoothstep(basinR * 0.96, basinR * 1.04, Math.hypot(x - cx, z - cz))
+        : 1;
+      data[k + 3] = (m * 255) | 0;
     }
   }
   const t = new THREE.DataTexture(data, res, res, THREE.RGBAFormat);
@@ -282,14 +304,16 @@ export function setWaterEnv(tex) {
 
 export function buildWaters(scene) {
   const mk = (o) => {
-    const depth = depthMap(o.w, o.d, o.x, o.z, o.y, o.depthScale, o.depthRes);
+    const depth = depthMap(o.w, o.d, o.x, o.z, o.y, o.depthScale, o.depthRes, o.basin);
     const m = createWaterMaterial({
       depth, center: [o.x, o.z], size: [o.w, o.d],
       deep: o.deep, shallow: o.shallow, opacity: o.opacity,
       rough: o.rough, metalness: o.metalness,
       nrmScale: o.nrmScale, ripple: o.ripple, wave: o.wave, foam: o.foam,
+      waveFoam: o.waveFoam,
       sunGloss: o.sunGloss, sunStrength: o.sunStrength,
     });
+    // 海面要足够密才能托住 27m 短浪（192 段 ≈ 5.5m/格），否则波峰被削成三角锯齿
     const g = new THREE.PlaneGeometry(o.w, o.d, o.seg, o.seg);
     const mesh = new THREE.Mesh(g, m);
     mesh.rotation.x = -Math.PI / 2;
@@ -299,24 +323,32 @@ export function buildWaters(scene) {
     waters.push(m);
     return mesh;
   };
-  // 大海：长涌浪 + 强天光反射
-  mk({ w: CFG.WORLD * 1.9, d: CFG.WORLD * 1.9, x: 0, z: 0, y: CFG.SEA_Y, seg: 128,
+  // 大海：Gerstner 主浪 + 强天光反射；wave 是浪幅倍率，风力由 env 每帧叠加
+  mk({ w: CFG.WORLD * 1.9, d: CFG.WORLD * 1.9, x: 0, z: 0, y: CFG.SEA_Y, seg: 192,
     depthScale: 7, depthRes: 512,
     deep: 0x0d3440, shallow: 0x3e8c8b, opacity: 0.93, rough: 0.17, metalness: 0.16,
-    nrmScale: 0.032, ripple: 0.85, wave: 1.0, foam: 0.7,
+    nrmScale: 0.032, ripple: 0.85, wave: 1.3, foam: 0.7, waveFoam: 0.62,
     sunGloss: 110, sunStrength: 0.85 });
-  // 水塘：树荫下的静水，涟漪更细
-  mk({ w: 112, d: 104, x: POND.x, z: POND.z, y: CFG.POND_Y, seg: 48,
+  // 水塘：树荫下的静水，只留极轻的呼吸起伏，不能有海浪
+  mk({ w: 140, d: 130, x: POND.x, z: POND.z, y: CFG.POND_Y, seg: 48, basin: 52.5,
     depthScale: 1.8, depthRes: 192,
     deep: 0x173c33, shallow: 0x4c7d61, opacity: 0.88, rough: 0.18, metalness: 0.05,
-    nrmScale: 0.10, ripple: 0.55, wave: 0.5, foam: 0.75,
+    nrmScale: 0.10, ripple: 0.55, wave: 0.12, foam: 0.75, waveFoam: 0,
     sunGloss: 70, sunStrength: 0.35 });
   // 沼泽：浑水、几乎无浪
-  mk({ w: 132, d: 138, x: SWAMP.x, z: SWAMP.z, y: CFG.SWAMP_Y, seg: 48,
+  mk({ w: 165, d: 172.5, x: SWAMP.x, z: SWAMP.z, y: CFG.SWAMP_Y, seg: 48, basin: 65,
     depthScale: 1.1, depthRes: 192,
     deep: 0x26331d, shallow: 0x5c6a38, opacity: 0.94, rough: 0.28, metalness: 0.03,
-    nrmScale: 0.14, ripple: 0.38, wave: 0.32, foam: 0.4,
+    nrmScale: 0.14, ripple: 0.38, wave: 0.06, foam: 0.4, waveFoam: 0,
     sunGloss: 55, sunStrength: 0.15 });
+  for (const p of EXTRA_POOLS) {
+    mk({ w: p.w, d: p.d, x: p.x, z: p.z, y: p.y, seg: 32, basin: p.r,
+      depth: depthMap(p.w, p.d, p.x, p.z, p.y, p.depth + 0.8, 128, p.r),
+      depthScale: p.depth + 0.8, depthRes: 128,
+      deep: 0x193f35, shallow: 0x66836a, opacity: 0.9, rough: 0.25, metalness: 0.025,
+      nrmScale: 0.12, ripple: 0.46, wave: 0.10, foam: 0.9, waveFoam: 0,
+      sunGloss: 58, sunStrength: 0.22 });
+  }
 }
 export function updateWaters(t) { setWaterTime(t); }
 
@@ -326,15 +358,15 @@ export function zoneState(x, z) {
   const swampD = ds_(x, z);
   const inWater = pondD < 30 && baseHeight(x, z) < CFG.POND_Y - 0.15;
   const inSwampWater = swampD < 44 && baseHeight(x, z) < CFG.SWAMP_Y + 0.2 && !inCaveCorr(x, z);
-  const onBoard = Math.abs(x - 86) < 2.4 && z < 96 && z > 10;
-  const deep = dist2(x, z, 0, 0) > CFG.DEEP_R || (baseHeight(x, z) < -1.5 && dist2(x, z, 0, 0) > 215);
+  const onBoard = Math.abs(x - SWAMP.x) < 2.4 && z < 120 && z > 13;
+  const deep = dist2(x, z, 0, 0) > CFG.DEEP_R || (baseHeight(x, z) < -1.5 && dist2(x, z, 0, 0) > 268);
   return { pondD, swampD, inWater, inSwampWater, onBoard, deep, cave: inCaveDark(x, z) };
 }
 
 // —— 到水面的距离场（供水流环境音） ——
 // 启动时按 160×160 格烘焙一次「每格到最近水域的平面距离 + 水深」，运行时双线性采样，
 // 每帧零地形计算开销。岸线就是"地形高度 < 水面高度"的那条线，所以格内直接比高度即可。
-const WD_N = 160;                              // 网格精度：560m / 160 ≈ 3.5m
+const WD_N = 190;                              // 网格精度：700m / 190 ≈ 3.7m
 const WD_CELL = CFG.WORLD / (WD_N - 1);
 let wdDist = null, wdDepth = null;             // 单位：米
 export const WD_MAX = 30;
@@ -350,8 +382,11 @@ export function buildWaterField() {
       const h = baseHeight(x, z);
       // 该格归属的水面：沼泽 > 水塘 > 海（就近覆盖）
       let level = CFG.SEA_Y;
-      if (dist2(x, z, SWAMP.x, SWAMP.z) < 52) level = CFG.SWAMP_Y;
-      else if (dist2(x, z, POND.x, POND.z) < 42) level = CFG.POND_Y;
+      if (dist2(x, z, SWAMP.x, SWAMP.z) < 65) level = CFG.SWAMP_Y;
+      else if (dist2(x, z, POND.x, POND.z) < 52.5) level = CFG.POND_Y;
+      for (const p of EXTRA_POOLS) {
+        if (dist2(x, z, p.x, p.z) < p.r) level = Math.max(level, p.y);
+      }
       const k = j * N + i;
       if (h <= level) { dist[k] = 0; depth[k] = level - h; }
       else { dist[k] = INF; depth[k] = 0; }

@@ -74,10 +74,7 @@ export class TPS {
     }
 
     // —— 角色姿态 ——
-    // 空手收步滑行期间位置仍在往前挪，但此时应该播 stop_walk。
-    // 若不屏蔽，speed>0.35 会被判成「还在走」，收脚动作一触发就被打断。
-    const gliding = p.wep === 'none' && p.stopGlide > 0;
-    const moving = this.speed > 0.35 && !gliding;
+    const moving = this.speed > 0.35;
     // 局部输入方向（f=前/后，r=右/左），未归一化，键盘单轴时正好 ±1
     const inX = p.inX || 0, inZ = p.inZ || 0;
     const inLen = Math.hypot(inX, inZ);
@@ -91,9 +88,6 @@ export class TPS {
       const wx = -sy * f + cy * r;      // yaw=0 时前 = -Z
       const wz = -cy * f - sy * r;
       bodyYaw = Math.atan2(-wx, -wz);
-    } else if (gliding && !p.aiming && p.glideV0 > 0) {
-      // 收脚这最后一步仍朝着原移动方向，否则身体转回镜头、人却还在往前挪 = 横着滑
-      bodyYaw = Math.atan2(-p.glideDir.x, -p.glideDir.z);
     }
 
     this.char.update(dt, {

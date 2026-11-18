@@ -17,8 +17,15 @@ if (!esbuild) {
 }
 const minify = !process.argv.includes('--dev');
 
-// esbuild 的 bin/esbuild 是原生二进制，直接执行（不要 node 包一层）
-execFileSync(esbuild, [
+// Windows 上 bin/esbuild 是 JS shim，spawnSync 无法直接执行（ENOENT）。
+// 优先找同包的原生 esbuild.exe，找不到再用 node 包一层跑 JS shim。
+const nativeExe = path.join(path.dirname(path.dirname(esbuild)), '@esbuild', 'win32-x64', 'esbuild.exe');
+const esbuildCmd = fs.existsSync(nativeExe) ? nativeExe : 'node';
+const esbuildArgs = fs.existsSync(nativeExe)
+  ? []
+  : [esbuild];
+execFileSync(esbuildCmd, [
+  ...esbuildArgs,
   path.join(root, 'src', 'main.js'),
   '--bundle',
   '--format=iife',
@@ -36,7 +43,7 @@ const js = fs.readFileSync(path.join(root, 'bundle.js'), 'utf8');
 const optRoot = path.join(root, 'assets_opt');
 const useOpt = fs.existsSync(optRoot);
 const glbDir = useOpt ? optRoot : path.join(root, 'assets');
-const KNOWN = ['player', 'robot', 'rifle', 'knife', 'jeep', 'm151', 'cabin', 'medkit', 'boat', 'rock', 'dino', 'mutant', 'wolf', 'stump', 'zombie', 'reef'];
+const KNOWN = ['player', 'robot', 'rifle', 'knife', 'jeep', 'm151', 'cabin', 'medkit', 'boat', 'rock', 'dino', 'mutant', 'wolf', 'stump', 'zombie', 'reef', 'marble'];
 const single = process.argv.includes('--single');
 const assetData = {};
 const audioData = {};

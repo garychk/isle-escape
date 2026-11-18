@@ -1,6 +1,6 @@
 // 结构物：索桥 / 沼泽木板路 / 山洞穹顶 / 救生筏 / 遇难残骸 / 林中木屋
 import * as THREE from 'three';
-import { CFG, RAFT, BOAT, CABIN } from './config.js';
+import { CFG, RAFT, BOAT, CABIN, SWAMP, MARBLE } from './config.js';
 import { mulberry32 } from './util.js';
 import { baseHeight, surfaceRects, surfaceRamps } from './terrain.js';
 import { colliders } from './flora.js';
@@ -28,28 +28,79 @@ export function buildStructures(scene) {
   buildWreck(g);
   buildCabin(g);
   buildLandmarks(g);
+  buildMarbleMountain(g);
   return g;
+}
+
+// ================= 东岭大理石山（Carrara 采石场航拍扫描，2026-11-18） =================
+// GLB 原点=底面中心（24×34m 底座、10.6m 高差，四边带封闭裙边）。
+// 缩放 ×4.2 → 基座 ~143×101m、崖高 ~44.5m，底部下埋 4m 让裙边盖住与地形的接缝；
+// 采样 footprint 内地形最低点落位，地形更高处自然"穿进"山体（岩层从地里冒出）。
+function buildMarbleMountain(g) {
+  const inst = instance('marble');
+  if (!inst) { console.warn('[structures] marble.glb 缺失，跳过大理石山'); return; }
+  const w = inst.wrap;
+  const s = MARBLE.s;
+  // footprint 半宽（旋转前模型 x 24 / y 34，rot=-90° 后沿世界 x 是 34×s）
+  const hx = 17.16 * s, hz = 11.98 * s;
+  // 采样 footprint 覆盖的地形最低点（网格 8×6 采样足够）
+  let hMin = Infinity;
+  for (let i = 0; i <= 8; i++) {
+    for (let j = 0; j <= 6; j++) {
+      const x = MARBLE.x - hx + (i / 8) * hx * 2;
+      const z = MARBLE.z - hz + (j / 6) * hz * 2;
+      hMin = Math.min(hMin, baseHeight(x, z));
+    }
+  }
+  w.position.set(MARBLE.x, hMin - MARBLE.sink, MARBLE.z);
+  w.scale.setScalar(s);
+  w.rotation.y = MARBLE.rot;
+  // 山体太大不进方向光阴影相机范围，强开会拉假阴影；自阴影仍保留在材质上
+  w.traverse(o => {
+    if (!o.isMesh) return;
+    o.castShadow = false;
+    o.receiveShadow = true;
+    // 提亮大理石质感：贴图偏灰，压 roughness、加环境反射，避免背光面死黑
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (!m) continue;
+      m.color = new THREE.Color(0xffffff);
+      m.roughness = Math.min(m.roughness ?? 1, 0.88);
+      m.envMapIntensity = 1.45;
+      m.needsUpdate = true;
+    }
+  });
+  g.add(w);
+  // 碰撞：山脚一圈圆盖住 footprint 外缘（崖壁立陡，防止玩家走进模型穿模）
+  // 8 圆沿 footprint 边界布置，半径盖到山脚内 6m
+  const ringR = Math.max(hx, hz) * 0.72;
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * 6.283;
+    colliders.push({ x: MARBLE.x + Math.cos(a) * ringR * 0.62, z: MARBLE.z + Math.sin(a) * ringR * 0.62, r: ringR * 0.52 });
+  }
 }
 
 // ================= 场景地标：让沿途不再是一条空走廊 =================
 // 全部程序化几何，不依赖外部资产；放在小径支线附近，靠近就有探索奖励。
 function buildLandmarks(g) {
-  const metal = new THREE.MeshStandardMaterial({ color: 0x70776f, roughness: 0.72, metalness: 0.35 });
+  // 坠机残骸的风化铝皮：粗糙度拉高、金属度压低——否则雨天机翼把天空照得亮白白，
+  // 看起来就像一块悬在陆地上的"水面"（曾经被当成水面 bug 报过）
+  const metal = new THREE.MeshStandardMaterial({ color: 0x5a5f57, roughness: 0.95, metalness: 0.08 });
   const rust = new THREE.MeshStandardMaterial({ color: 0x6e4a37, roughness: 0.92, metalness: 0.15 });
   const tarp = new THREE.MeshStandardMaterial({ color: 0x3f5340, roughness: 0.95, side: THREE.DoubleSide });
   const ember = new THREE.MeshBasicMaterial({ color: 0xff8a3c });
 
-  // 1) 瞭望塔：密林腹地 (-58,112) 旁，木质高台 + 梯子 + 顶棚
-  watchTower(g, -64, 108);
+  // 1) 瞭望塔：密林腹地 (-72.5,140) 旁，木质高台 + 梯子 + 顶棚
+  watchTower(g, -80, 135);
 
-  // 2) 失事运输机残骸：林间空地 (44,95)，断裂机身 + 机翼 + 散落碎片
-  planeWreck(g, 44, 95, metal, rust);
+  // 2) 失事运输机残骸：林间空地 (55,118.75)，断裂机身 + 机翼 + 散落碎片
+  planeWreck(g, 55, 118.75, metal, rust);
 
-  // 3)  abandoned 营地：沼泽边 (70,30)，帐篷 + 篝火（带点光源）
-  campFire(g, 70, 30, tarp, woodDark, ember);
+  // 3)  abandoned 营地：沼泽边 (87.5,37.5)，帐篷 + 篝火（带点光源）
+  campFire(g, 87.5, 37.5, tarp, woodDark, ember);
 
   // 4) 北岸信号塔：给终点一个清晰的地标
-  signalTower(g, 16, -205, metal, rust);
+  signalTower(g, 20, -256.25, metal, rust);
 }
 
 function watchTower(g, x, z) {
@@ -88,7 +139,7 @@ function tarpMat() {
 function planeWreck(g, x, z, metal, rust) {
   const y = baseHeight(x, z);
   const p = new THREE.Group();
-  p.position.set(x, y, z);
+  p.position.set(x, y - 0.3, z);
   p.rotation.y = -0.5;
   // 断裂机身（两段）
   const body1 = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.35, 6.5, 12), metal);
@@ -256,7 +307,7 @@ function buildCabin(g) {
 // ================= 索桥 =================
 function buildBridge(g) {
   const yD = CFG.BRIDGE_Y;
-  const zA = 17, zB = -29, span = zA - zB;
+  const zA = 21.25, zB = -36.25, span = zA - zB;
   const sag = 1.4;
 
   // 桥塔
@@ -338,21 +389,21 @@ function buildBridge(g) {
 function buildBoardwalk(g) {
   const y = CFG.SWAMP_Y + 0.55;
   const plankGeo = new THREE.BoxGeometry(2.7, 0.11, 0.62);
-  for (let z = 12; z <= 98; z += 0.72) {
+  for (let z = 15; z <= 122.5; z += 0.72) {
     const p = new THREE.Mesh(plankGeo, (z * 10 | 0) % 3 === 0 ? woodDark : woodMat);
-    p.position.set(86 + (rng() - 0.5) * 0.08, y + (rng() - 0.5) * 0.02, z);
+    p.position.set(SWAMP.x + (rng() - 0.5) * 0.08, y + (rng() - 0.5) * 0.02, z);
     p.rotation.y = (rng() - 0.5) * 0.03;
     p.receiveShadow = true;
     g.add(p);
   }
-  for (let z = 14; z <= 96; z += 6) {
+  for (let z = 17.5; z <= 120; z += 6) {
     for (const px of [-1.25, 1.25]) {
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 2.4, 5), woodDark);
-      post.position.set(86 + px, y - 1.05, z);
+      post.position.set(SWAMP.x + px, y - 1.05, z);
       g.add(post);
       const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 6, 4), ropeMat);
       rail.rotation.x = Math.PI / 2;
-      rail.position.set(86 + px, y + 0.8, z + 3);
+      rail.position.set(SWAMP.x + px, y + 0.8, z + 3);
       g.add(rail);
     }
   }
@@ -368,8 +419,8 @@ function buildCave(g) {
   const ceilGeo = new THREE.DodecahedronGeometry(1, 0);
   const ceil = new THREE.InstancedMesh(ceilGeo, wallMat, 190);
   let ci = 0;
-  for (let z = -48; z > -176; z -= 2.6) {
-    for (const x of [-6.5, -2.2, 2.2, 6.5]) {
+  for (let z = -60; z > -220; z -= 3.25) {
+    for (const x of [-8.125, -2.75, 2.75, 8.125]) {
       if (ci >= 190) break;
       UP.position.set(x + (rng() - 0.5) * 1.8, caveY + 8.4 + rng() * 1.6, z + (rng() - 0.5) * 1.2);
       UP.scale.set(3.4 + rng() * 2.4, 1.8 + rng() * 1.4, 3.2 + rng() * 2.6);
@@ -385,11 +436,11 @@ function buildCave(g) {
   // 两侧岩壁凸起
   const wall = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), wallMat, 120);
   let wi = 0;
-  for (let z = -50; z > -174 && wi < 120; z -= 2.2) {
+  for (let z = -62.5; z > -217.5 && wi < 120; z -= 2.75) {
     for (const side of [-1, 1]) {
       if (rng() < 0.25) continue;
       const s = 1.6 + rng() * 2.4;
-      UP.position.set(side * (6.2 + rng() * 0.8), caveY + 0.6 + rng() * 3.2, z + rng());
+      UP.position.set(side * (7.75 + rng() * 1.0), caveY + 0.6 + rng() * 3.2, z + rng());
       UP.scale.set(s, s * 0.95, s * 1.4);
       UP.rotation.set(rng() * 3, rng() * 3, rng() * 3);
       UP.updateMatrix();
@@ -403,9 +454,9 @@ function buildCave(g) {
   // 石笋 + 钟乳石
   const stalag = new THREE.InstancedMesh(new THREE.ConeGeometry(0.5, 2.4, 7), wallMat, 46);
   let si = 0;
-  for (let z = -54; z > -172 && si < 46; z -= 3) {
+  for (let z = -67.5; z > -215 && si < 46; z -= 3.75) {
     if (rng() < 0.35) continue;
-    UP.position.set((rng() - 0.5) * 8, caveY + 1.1, z);
+    UP.position.set((rng() - 0.5) * 10, caveY + 1.1, z);
     UP.scale.set(0.7 + rng() * 1.5, 0.7 + rng() * 1.9, 0.7 + rng() * 1.5);
     UP.rotation.set(Math.PI, rng() * 6.28, 0);
     UP.updateMatrix();
@@ -416,9 +467,9 @@ function buildCave(g) {
 
   const stalact = new THREE.InstancedMesh(new THREE.ConeGeometry(0.4, 3.2, 6), wallMat, 34);
   let ti = 0;
-  for (let z = -56; z > -170 && ti < 34; z -= 3.2) {
+  for (let z = -70; z > -212.5 && ti < 34; z -= 4) {
     if (rng() < 0.3) continue;
-    UP.position.set((rng() - 0.5) * 8, caveY + 7.6, z);
+    UP.position.set((rng() - 0.5) * 10, caveY + 7.6, z);
     UP.scale.set(0.6 + rng() * 1.2, 0.8 + rng() * 1.6, 0.6 + rng() * 1.2);
     UP.rotation.set(0, rng() * 6.28, 0);
     UP.updateMatrix();
@@ -428,8 +479,8 @@ function buildCave(g) {
   g.add(stalact);
 
   // 洞口岩框
-  for (const z of [-46.5, -175.5]) {
-    const arch = new THREE.Mesh(new THREE.TorusGeometry(7.4, 1.9, 7, 14, Math.PI), wallMat);
+  for (const z of [-58.125, -219.375]) {
+    const arch = new THREE.Mesh(new THREE.TorusGeometry(9.25, 2.375, 7, 14, Math.PI), wallMat);
     arch.position.set(0, caveY + 0.3, z);
     arch.scale.y = 1.15;
     g.add(arch);
@@ -437,7 +488,7 @@ function buildCave(g) {
 
   // 发光水晶
   const crystalMat = new THREE.MeshStandardMaterial({ color: 0x3fbfae, emissive: 0x1d8f80, emissiveIntensity: 0.75, roughness: 0.3, flatShading: true });
-  const spots = [[-3.6, -70], [3.8, -96], [-3.2, -124], [3.4, -148], [0, -162]];
+  const spots = [[-4.5, -87.5], [4.75, -120], [-4, -155], [4.25, -185], [0, -202.5]];
   for (const [cx, cz] of spots) {
     for (let k = 0; k < 4; k++) {
       const c = new THREE.Mesh(new THREE.OctahedronGeometry(0.42, 0), crystalMat);
@@ -561,10 +612,10 @@ export function updateRaft(t) {
 export const reefState = { instances: 0, missing: false, skipped: false, placements: [] };
 
 const REEF_SPOTS = [
-  // 三座都放在深海边界（半径 250）之外，玩家到不了，避免相机钻进礁石模型看到背面
-  { x: 0, z: 278, s: 0.13, rot: 0.6 },       // 近岸礁：正对出生点，替代原来那堆假船肋
-  { x: -95, z: 320, s: 0.26, rot: 2.4 },    // 外海中岛
-  { x: 135, z: 385, s: 0.34, rot: -1.1 },   // 外海远岛
+  // 三座都放在深海边界（半径 312）之外，玩家到不了，避免相机钻进礁石模型看到背面
+  { x: 0, z: 347.5, s: 0.13, rot: 0.6 },       // 近岸礁：正对出生点，替代原来那堆假船肋
+  { x: -118.75, z: 400, s: 0.26, rot: 2.4 },    // 外海中岛
+  { x: 168.75, z: 481.25, s: 0.34, rot: -1.1 },   // 外海远岛
 ];
 
 function buildOffshoreReefs(g) {
@@ -596,7 +647,7 @@ function buildWreck(g) {
   const crateMat = new THREE.MeshStandardMaterial({ map: woodGrain(), color: 0xe6d3b0, roughness: 0.96 });
   const bandMat = new THREE.MeshStandardMaterial({ color: 0x6b5236, roughness: 1 });
   for (let i = 0; i < 4; i++) {
-    const x = -22 + rng() * 12, z = 194 + rng() * 13;
+    const x = -27.5 + rng() * 15, z = 242.5 + rng() * 16.25;
     const w = 0.8 + rng() * 0.45, h = 0.62 + rng() * 0.16;
     const crate = new THREE.Group();
     const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, w * 0.92), crateMat);
@@ -627,7 +678,7 @@ function buildWreckRocks(g) {
   geo.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
   const mat = new THREE.MeshStandardMaterial({ map: rockTex(), color: 0xe0d8c8, roughness: 0.96 });
   const ROCKS = [
-    [-16, 211, 1.9], [-9, 215, 1.5], [-20, 218, 1.7], [-5, 207, 1.3], [-13, 222, 1.8],
+    [-20, 263.75, 1.9], [-11.25, 268.75, 1.5], [-25, 272.5, 1.7], [-6.25, 258.75, 1.3], [-16.25, 277.5, 1.8],
   ];
   for (const [x, z, s] of ROCKS) {
     const m = new THREE.Mesh(geo, mat);

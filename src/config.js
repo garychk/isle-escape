@@ -1,6 +1,6 @@
 // 全局配置与地图布局
 export const CFG = {
-  WORLD: 560,            // 世界边长 (x,z ∈ ±280)
+  WORLD: 700,            // 世界边长 (x,z ∈ ±350)；2026-11-18 岛屿平面放大 ×1.25（高度体系不变）
   SEA_Y: 0,              // 海平面
   POND_Y: 2.55,          // 水塘水面
   SWAMP_Y: 2.6,          // 沼泽水面
@@ -15,9 +15,9 @@ export const CFG = {
   HP_MAX: 100, ST_MAX: 100,
   ST_DRAIN: 22, ST_REGEN: 14,
   SWAMP_DPS: 3.5,        // 沼泽血蛭伤害
-  SWAMP_SLOW_R: 40,
+  SWAMP_SLOW_R: 50,
   POISON_DPS: 4, POISON_TIME: 6,
-  DEEP_R: 250,           // 深海边界（禁出）
+  DEEP_R: 312,           // 深海边界（禁出）
   // 步枪
   RIFLE_DMG: 34, RIFLE_RPM: 360, MAG: 30, RELOAD: 1.9,
   RIFLE_RANGE: 160, SPREAD: 0.011, AIM_SPREAD: 0.004,
@@ -25,60 +25,61 @@ export const CFG = {
   KNIFE_DMG: 60, KNIFE_RANGE: 2.4, KNIFE_CD: 0.45,
 };
 
-// 地图关键点
-export const SPAWN = { x: 0, z: 205 };
-export const RAFT  = { x: 5, z: -218 };
-export const BOAT  = { x: 2.9, z: -220.8, y: 0, scale: 0.55 }; // 渔船（泊在栈桥外，船头朝海；GLB 原点=船中水线，主甲板高 1.0）
-export const POND  = { x: -78, z: 62 };
-export const SWAMP = { x: 86, z: 52 };
-export const MOUNT = { x: 0, z: -120 };      // 山体（含洞穴）
-export const CAVE_IN  = { x: 0, z: -50 };    // 洞口（南）
-export const CAVE_OUT = { x: 0, z: -172 };   // 洞口（北）
-export const BRIDGE = { x: 0, z0: 14, z1: -26 }; // 索桥（跨峡谷）
-export const CABIN = { x: -34, z: 15.5, padY: 5.3 }; // 林中木屋（地形压平到 padY）
-export const CAMPFIRE = { x: 70, z: 30 }; // 沼泽边废弃营地篝火（靠近回血补给点）
+// 地图关键点（2026-11-18 岛屿放大：平面 ×1.25，高度体系不变）
+export const SPAWN = { x: 0, z: 256 };
+export const RAFT  = { x: 6.25, z: -272.5 };
+export const BOAT  = { x: 3.625, z: -276, y: 0, scale: 0.55 }; // 渔船（泊在栈桥外，船头朝海；GLB 原点=船中水线，主甲板高 1.0）
+export const POND  = { x: -97.5, z: 77.5 };
+export const SWAMP = { x: 107.5, z: 65 };
+export const MOUNT = { x: 0, z: -150 };      // 山体（含洞穴）
+export const CAVE_IN  = { x: 0, z: -62.5 };    // 洞口（南）
+export const CAVE_OUT = { x: 0, z: -215 };   // 洞口（北）
+export const BRIDGE = { x: 0, z0: 17.5, z1: -32.5 }; // 索桥（跨峡谷）
+export const CABIN = { x: -42.5, z: 19.375, padY: 5.3 }; // 林中木屋（地形压平到 padY）
+export const CAMPFIRE = { x: 87.5, z: 37.5 }; // 沼泽边废弃营地篝火（靠近回血补给点）
+export const MARBLE = { x: 175, z: -100, s: 4.8, rot: -Math.PI / 2, sink: 9 }; // 东岭大理石山（carrara 采石场扫描）
 
 // 引导小径折线（林间开路 + 泥土色）
 export const TRAIL = [
-  { x: 0, z: 205 }, { x: -28, z: 158 }, { x: -58, z: 112 }, { x: -104, z: 74 },
-  { x: -96, z: 40 }, { x: -52, z: 22 }, { x: -14, z: 24 }, { x: 0, z: 18 },
-  { x: 0, z: -26 },               // 过索桥
-  { x: 0, z: -50 }, { x: 0, z: -100 }, { x: 0, z: -150 }, { x: 0, z: -172 }, // 穿洞
-  { x: 3, z: -196 }, { x: 5, z: -218 }, // 北岸
+  { x: 0, z: 256 }, { x: -35, z: 197.5 }, { x: -72.5, z: 140 }, { x: -130, z: 92.5 },
+  { x: -120, z: 50 }, { x: -65, z: 27.5 }, { x: -17.5, z: 30 }, { x: 0, z: 22.5 },
+  { x: 0, z: -32.5 },               // 过索桥
+  { x: 0, z: -62.5 }, { x: 0, z: -125 }, { x: 0, z: -187.5 }, { x: 0, z: -215 }, // 穿洞
+  { x: 3.75, z: -245 }, { x: 6.25, z: -272.5 }, // 北岸
   // 支线：沼泽木板路
-  { x: 86, z: 96 }, { x: 86, z: 52 }, { x: 86, z: 14 },
+  { x: 107.5, z: 120 }, { x: 107.5, z: 65 }, { x: 107.5, z: 17.5 },
 ];
 export const TRAIL_W = 5.2;
 
 // 拾取点 [x, z, 类型]  ammo / medkit
 export const PICKUPS = [
-  [-28, 158, 'ammo'], [-104, 74, 'ammo'], [-96, 40, 'medkit'],
-  [40, 60, 'ammo'], [86, 70, 'medkit'], [0, 18, 'ammo'],
-  [0, -40, 'ammo'], [0, -100, 'ammo'], [0, -140, 'medkit'], [0, -172, 'ammo'],
-  [44, -150, 'ammo'], [-40, -180, 'medkit'],
-  // 林中木屋补给（屋内×3 + 门廊×1）
-  [-37, 18, 'ammo'], [-29.5, 15, 'ammo'], [-31.5, 19.3, 'medkit'], [-27, 21.9, 'medkit'],
+  [-35, 197.5, 'ammo'], [-130, 92.5, 'ammo'], [-120, 50, 'medkit'],
+  [50, 75, 'ammo'], [107.5, 87.5, 'medkit'], [0, 22.5, 'ammo'],
+  [0, -50, 'ammo'], [0, -125, 'ammo'], [0, -175, 'medkit'], [0, -215, 'ammo'],
+  [55, -187.5, 'ammo'], [-50, -225, 'medkit'],
+  // 林中木屋补给（屋内×3 + 门廊×1；木屋本体不放大，保持相对 CABIN 的偏移）
+  [-45.5, 21.875, 'ammo'], [-38, 18.875, 'ammo'], [-40, 23.175, 'medkit'], [-35.5, 25.775, 'medkit'],
   // 新增：地标附近的探索奖励，鼓励离路探索
-  [-64, 112, 'medkit'],   // 瞭望塔下
-  [44, 99, 'ammo'],       // 飞机残骸
-  [70, 34, 'ammo'],       // 沼泽营地
-  [16, -209, 'medkit'],   // 北岸信号塔
-  [-120, 130, 'ammo'], [-130, 60, 'medkit'],   // 西侧密林深处
-  [110, -120, 'ammo'],    // 东侧北岸
+  [-80, 140, 'medkit'],   // 瞭望塔下
+  [55, 123.75, 'ammo'],       // 飞机残骸
+  [87.5, 42.5, 'ammo'],       // 沼泽营地
+  [20, -261.25, 'medkit'],   // 北岸信号塔
+  [-150, 162.5, 'ammo'], [-162.5, 75, 'medkit'],   // 西侧密林深处
+  [120, -62.5, 'ammo'],    // 东岭大理石山脚（原东侧北岸点，挪到山西侧空地）
 ];
 
 // 野兽巢穴 [类型, x, z, 数量]
 export const BEAST_SPAWNS = [
-  ['wolf', -50, 130, 3], ['wolf', 40, 95, 2], ['wolf', -60, -30, 2],
-  ['bear', -78, 96, 1],                       // 水塘边的棕熊
-  ['dino', 30, 125, 2],                       // 密林深处的变异恐龙
-  // 山洞守卫（走廊 x∈±9, z -50..-172）：spawnAll 有 ±7 抖动，出生点取 x=0 才不会抖出洞壁
-  ['zombie', 0, -85, 2], ['zombie', 0, -115, 2], ['zombie', 0, -145, 2], ['zombie', 0, -168, 1],
+  ['wolf', -62.5, 162.5, 3], ['wolf', 50, 118.75, 2], ['wolf', -75, -37.5, 2],
+  ['bear', -97.5, 120, 1],                       // 水塘边的棕熊
+  ['dino', 37.5, 156.25, 2],                     // 密林深处的变异恐龙
+  // 山洞守卫（走廊 x∈±11, z -62.5..-215）：spawnAll 有 ±8.75 抖动，出生点取 x=0 才不会抖出洞壁
+  ['zombie', 0, -106, 2], ['zombie', 0, -144, 2], ['zombie', 0, -181, 2], ['zombie', 0, -210, 1],
   // 新增：地标附近的游荡兽群，奖励探索也提升威胁
-  ['wolf', -64, 108, 2],    // 瞭望塔
-  ['zombie', 44, 96, 2],    // 飞机残骸（洞外也有僵尸，制造"林地不安"的氛围）
-  ['dino', 118, -110, 1],   // 东侧北岸
-  ['wolf', -125, 55, 2],    // 西侧密林
+  ['wolf', -80, 135, 2],    // 瞭望塔
+  ['zombie', 55, 120, 2],   // 飞机残骸（洞外也有僵尸，制造"林地不安"的氛围）
+  ['dino', 147.5, -137.5, 1],   // 东岭（大理石山脚守卫）
+  ['wolf', -156.25, 68.75, 2],    // 西侧密林
 ];
 
 // 野兽数值
@@ -95,11 +96,12 @@ export const BEASTS = {
 
 // 区域名卡（进入区域时展示）
 export const ZONES = [
-  { name: '林中木屋', sub: 'HUNTER CABIN', x0: -46, z0: 5, x1: -22, z1: 27, once: true },
-  { name: '密林腹地', sub: 'DEEP JUNGLE', x0: -160, z0: 90, x1: 160, z1: 180, once: true },
-  { name: '林间水塘', sub: 'JUNGLE POOL', x0: -125, z0: 30, x1: -35, z1: 95, once: true },
-  { name: '瘴气沼泽', sub: 'MIASMA SWAMP', x0: 40, z0: 10, x1: 135, z1: 100, once: true },
-  { name: '断魂谷',   sub: 'RAVINE CROSSING', x0: -80, z0: -30, x1: 80, z1: 18, once: true },
-  { name: '山腹洞穴', sub: 'THE HOLLOW', x0: -30, z0: -175, x1: 30, z1: -45, once: true },
-  { name: '北岸滩头', sub: 'NORTH SHORE', x0: -60, z0: -250, x1: 70, z1: -185, once: true },
+  { name: '林中木屋', sub: 'HUNTER CABIN', x0: -57.5, z0: 6.25, x1: -27.5, z1: 33.75, once: true },
+  { name: '密林腹地', sub: 'DEEP JUNGLE', x0: -200, z0: 112.5, x1: 200, z1: 225, once: true },
+  { name: '林间水塘', sub: 'JUNGLE POOL', x0: -156.25, z0: 37.5, x1: -43.75, z1: 118.75, once: true },
+  { name: '瘴气沼泽', sub: 'MIASMA SWAMP', x0: 50, z0: 12.5, x1: 168.75, z1: 125, once: true },
+  { name: '回声水洼', sub: 'ECHO MARSH POOLS', x0: 52.5, z0: -222.5, x1: 168.75, z1: 72.5, once: true },
+  { name: '断魂谷',   sub: 'RAVINE CROSSING', x0: -100, z0: -37.5, x1: 100, z1: 22.5, once: true },
+  { name: '山腹洞穴', sub: 'THE HOLLOW', x0: -37.5, z0: -218.75, x1: 37.5, z1: -56.25, once: true },
+  { name: '北岸滩头', sub: 'NORTH SHORE', x0: -75, z0: -312.5, x1: 87.5, z1: -231.25, once: true },
 ];

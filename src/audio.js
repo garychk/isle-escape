@@ -110,13 +110,8 @@ export function startAmbient() {
   ilfo.connect(ilg).connect(ig.gain);
   ins.connect(ig).connect(out);
   ins.start(); ilfo.start();
-  // 鸟鸣（随机哨音）
-  nodes.birdTimer = setInterval(() => {
-    if (!ctx || ctx.state !== 'running' || ig.gain.value > 0.02) return;
-    const f0 = 1800 + Math.random() * 2400;
-    tone('sine', f0, f0 * (0.7 + Math.random() * 0.6), 0.18, 0.045);
-    if (Math.random() < 0.5) tone('sine', f0 * 1.1, f0 * 0.8, 0.14, 0.035, 0.2);
-  }, 3400);
+  // 鸟鸣不再在这里随机点放：交由下方「野生动物音景」统一调度，
+  // 带真实声源坐标、左右声像、距离衰减，并跟随昼夜 / 雨天 / 海岸 / 洞穴变化。
   // 洞窟低鸣（进入洞穴时启用）
   const cave = c.createOscillator(); cave.type = 'sine'; cave.frequency.value = 55;
   const cg = c.createGain(); cg.gain.value = 0;
@@ -518,4 +513,224 @@ export function engineState() {
     };
   }
   return { on: true, file: false, gain: +engNodes.out.gain.value.toFixed(3) };
+}
+
+// ================= 野生动物音景 =================
+// 与 wildlife.js 的可见动物联动：每声都从画面里真实的鸟 / 远处地面点取声源坐标，
+// 按「玩家位置 + 相机右向量」算声像与距离衰减，再按昼夜 / 雨天 / 海岸 / 洞穴挑物种。
+// 全部 WebAudio 现场合成；远处兽吼复用已加载的 sfx_growl.ogg（低通 + 降速），
+// 因此不引入任何新资源请求，缺文件时也有完整合成兜底。
+const wildCtx = {
+  night: 0, rain: 0, cave: false, shore: 0,
+  px: 0, pz: 0, right: [1, 0], listening: false,
+};
+const wildStat = { calls: 0, birds: 0, roars: 0, last: '', lastDist: 0 };
+let wildTimer = null, wildGetPoint = null;
+const wc = (v, a, b) => v < a ? a : v > b ? b : v;
+
+/** 主循环定期同步：昼夜、雨量、洞穴、离海程度、玩家坐标与相机右向量 */
+export function setWildlifeContext(c) { Object.assign(wildCtx, c); }
+
+/** getPoint(kind): 'bird' | 'roar' | 'hiss' → {x,y,z}，由 wildlife.js 提供真实动物坐标 */
+export function startWildlifeAudio(getPoint) {
+  const c = ensure(); if (!c || wildTimer) return;
+  wildGetPoint = getPoint || null;
+  wildTimer = setInterval(wildTick, 850);
+}
+
+// 空间化输出链：距离衰减 + 左右声像 + 远处空气吸收（低通）
+function wSpatial(pos) {
+  const c = ensure(); if (!c || !enabled) return null;
+  const dx = pos.x - wildCtx.px, dz = pos.z - wildCtx.pz;
+  const d = Math.max(2, Math.hypot(dx, dz));
+  const pan = wc((dx * wildCtx.right[0] + dz * wildCtx.right[1]) / d, -1, 1) * 0.9;
+  const gain = wc(1 - d / 150, 0.045, 1) * (pos.y > 14 ? 0.72 : 1);
+  const lp = c.createBiquadFilter(); lp.type = 'lowpass';
+  lp.frequency.value = 12000 - Math.min(9800, d * 78);
+  lp.Q.value = 0.4;
+  const g = c.createGain(); g.gain.value = gain;
+  let tail = g;
+  if (c.createStereoPanner) {
+    const p = c.createStereoPanner(); p.pan.value = pan;
+    g.connect(p); tail = p;
+  }
+  tail.connect(lp).connect(master);
+  return { c, dst: g, gain, d, pan };
+}
+function wTone(dst, type, f0, f1, dur, gain, delay = 0, attack = 0.012) {
+  const c = ensure(); if (!c) return;
+  const o = c.createOscillator(); o.type = type;
+  const g = c.createGain(); const t = c.currentTime + delay;
+  o.frequency.setValueAtTime(Math.max(30, f0), t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(30, f1), t + dur);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), t + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(dst); o.start(t); o.stop(t + dur + 0.02);
+}
+function wNoise(dst, dur, type, freq, q, gain, delay = 0) {
+  const c = ensure(); if (!c) return;
+  const src = c.createBufferSource(); src.buffer = noiseBuf;
+  const f = c.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+  const g = c.createGain(); const t = c.currentTime + delay;
+  g.gain.setValueAtTime(Math.max(0.0002, gain), t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(f).connect(g).connect(dst);
+  src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.02);
+}
+function wBuf(key, dst, gain, rate, cutoff) {
+  const c = ensure(); const buf = sfxBuffers.get(key);
+  if (!c || !buf) return false;
+  const src = c.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
+  const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = cutoff; f.Q.value = 0.7;
+  const g = c.createGain(); g.gain.value = gain;
+  src.connect(f).connect(g).connect(dst); src.start();
+  return true;
+}
+
+// 各物种叫声明细：都是短促的调频音 + 共振峰噪声，参数每次随机，不会听成复读机
+function wCall(kind, dst, gain) {
+  const G = gain;
+  switch (kind) {
+    case 'chirp': {          // 林鸟：两声短促上滑啁啾，偶尔补第三声
+      const f = 2100 + Math.random() * 1500;
+      wTone(dst, 'sine', f, f * 1.48, 0.085, G * 0.13);
+      wTone(dst, 'sine', f * 1.22, f * 0.84, 0.10, G * 0.095, 0.13);
+      if (Math.random() < 0.5) wTone(dst, 'sine', f * 1.08, f * 1.52, 0.07, G * 0.08, 0.27);
+      break;
+    }
+    case 'trill': {          // 颤音：一串极短音符
+      const b = 2400 + Math.random() * 900, n = 5 + ((Math.random() * 4) | 0);
+      for (let i = 0; i < n; i++) {
+        wTone(dst, 'sine', b * (0.92 + Math.random() * 0.2), b * (1.05 + Math.random() * 0.25),
+          0.045, G * 0.072, i * 0.062, 0.008);
+      }
+      break;
+    }
+    case 'whistle': {        // 哨音：悠长下滑
+      const f = 1900 + Math.random() * 700;
+      wTone(dst, 'sine', f, f * 0.62, 0.32, G * 0.10, 0, 0.025);
+      wTone(dst, 'triangle', f * 2, f * 1.3, 0.26, G * 0.02, 0.02);
+      break;
+    }
+    case 'caw': {            // 乌鸦：粗哑的锯齿 + 共振峰噪声
+      const f = 560 + Math.random() * 180;
+      wTone(dst, 'sawtooth', f, f * 0.72, 0.20, G * 0.070);
+      wTone(dst, 'square', f * 1.5, f * 1.1, 0.16, G * 0.020, 0.02);
+      wNoise(dst, 0.18, 'bandpass', 1100, 3, G * 0.045, 0.02);
+      break;
+    }
+    case 'gull': {           // 海鸥 / 水鸟：三段尖叫
+      const f = 1000 + Math.random() * 300;
+      wTone(dst, 'sine', f, f * 1.6, 0.16, G * 0.095);
+      wTone(dst, 'sine', f * 1.55, f * 0.85, 0.30, G * 0.085, 0.16);
+      wTone(dst, 'sine', f * 1.30, f * 0.75, 0.22, G * 0.060, 0.42);
+      break;
+    }
+    case 'raptor': {         // 猛禽：高亢尖啸
+      const f = 2700 + Math.random() * 700;
+      wTone(dst, 'sine', f, f * 0.55, 0.55, G * 0.10, 0, 0.03);
+      wNoise(dst, 0.50, 'bandpass', 2200, 2.5, G * 0.028, 0.02);
+      break;
+    }
+    case 'hoot': {           // 夜鸟 / 猫头鹰：低沉双音
+      const f = 380 + Math.random() * 90;
+      wTone(dst, 'sine', f, f * 0.88, 0.30, G * 0.13, 0, 0.04);
+      wTone(dst, 'sine', f * 0.96, f * 0.82, 0.34, G * 0.11, 0.42, 0.04);
+      break;
+    }
+    case 'hiss': {           // 爬行类：草叶间的嘶声
+      wNoise(dst, 0.55, 'highpass', 2600, 0.8, G * 0.050);
+      wNoise(dst, 0.35, 'bandpass', 4200, 1.4, G * 0.028, 0.10);
+      break;
+    }
+    case 'roar': {           // 远处兽吼：真吼叫文件低通降速 + 低频层 + 山谷回声
+      wBuf('growl', dst, G * 0.60, 0.58 + Math.random() * 0.16, 420);
+      wTone(dst, 'sawtooth', 78, 42, 1.25, G * 0.095, 0, 0.09);
+      wTone(dst, 'sine', 55, 38, 1.50, G * 0.075, 0.06, 0.10);
+      wNoise(dst, 1.00, 'lowpass', 260, 0.7, G * 0.050, 0.05);
+      wTone(dst, 'sawtooth', 62, 40, 0.90, G * 0.030, 0.75, 0.08);  // 回声
+      break;
+    }
+    default: {
+      const f = 2000 + Math.random() * 900;
+      wTone(dst, 'sine', f, f * 1.3, 0.12, G * 0.10);
+    }
+  }
+}
+
+function pickBird(day, rain) {
+  const night = 1 - day, shore = wc(wildCtx.shore, 0, 1), damp = 1 - rain * 0.7;
+  const T = [
+    ['chirp', 32 * day * damp], ['trill', 22 * day * damp], ['whistle', 12 * day * damp],
+    ['caw', 8 * day * damp], ['raptor', 3 * day * damp],
+    ['gull', (5 + 26 * shore) * day * damp],
+    ['hoot', 20 * night], ['hiss', 5 + 5 * night],
+  ];
+  let sum = 0; for (const t of T) sum += t[1];
+  let r = Math.random() * sum;
+  for (const t of T) { r -= t[1]; if (r <= 0) return t[0]; }
+  return 'chirp';
+}
+
+function emitWild(kind, forced = false) {
+  if (!forced) {
+    // 昼夜切换瞬间，延迟触发的「对唱」可能还带着旧时段的物种（夜里冒出一声海鸥很穿帮），
+    // 发声前按当前环境再校正一次。debugWildlifeCall 用 forced=true 保留任意物种调试能力。
+    const day = 1 - wc(wildCtx.night, 0, 1);
+    if (day < 0.30 && /^(chirp|trill|whistle|caw|gull|raptor)$/.test(kind)) {
+      kind = Math.random() < 0.72 ? 'hoot' : 'hiss';
+    } else if (day > 0.70 && kind === 'hoot') kind = 'trill';
+  }
+  const src = wildGetPoint && wildGetPoint(kind === 'roar' ? 'roar' : (kind === 'hiss' ? 'hiss' : 'bird'));
+  const pos = src || {
+    x: wildCtx.px + (Math.random() - 0.5) * 50, y: 6 + Math.random() * 14,
+    z: wildCtx.pz + (Math.random() - 0.5) * 50,
+  };
+  const s = wSpatial(pos); if (!s) return;
+  wCall(kind, s.dst, s.gain);
+  wildStat.calls++;
+  if (kind === 'roar') wildStat.roars++; else wildStat.birds++;
+  wildStat.last = kind; wildStat.lastDist = Math.round(s.d * 10) / 10;
+}
+
+function wildTick() {
+  if (!ctx || ctx.state !== 'running' || !wildCtx.listening) return;
+  const day = 1 - wc(wildCtx.night, 0, 1);
+  const rain = wc(wildCtx.rain, 0, 1);
+  const cave = wildCtx.cave;
+  // 洞穴隔绝外界：几乎只剩偶尔一声极闷的远吼
+  const roarP = cave ? 0.006 : (0.012 + (1 - day) * 0.022 + rain * 0.012);
+  let kind = null;
+  if (Math.random() < roarP) kind = 'roar';
+  else if (!cave && Math.random() < 0.66 * (0.32 + day * 0.78) * (1 - rain * 0.72)) {
+    kind = pickBird(day, rain);
+  }
+  if (!kind) return;
+  emitWild(kind);
+  // 林中「对唱」：另一处声源隔一小会儿应答
+  if (kind !== 'roar' && Math.random() < 0.34) {
+    setTimeout(() => {
+      if (ctx && ctx.state === 'running') emitWild(Math.random() < 0.5 ? kind : pickBird(day, rain));
+    }, 220 + Math.random() * 380);
+  }
+}
+
+/** QA / 调试：绕过自动调度强制发一声，验证合成与空间化链路 */
+export function debugWildlifeCall(kind = 'chirp') {
+  emitWild(kind, true);
+  return wildlifeAudioState();
+}
+export function wildlifeAudioState() {
+  return {
+    on: !!wildTimer, running: ctx ? ctx.state : 'none',
+    calls: wildStat.calls, birds: wildStat.birds, roars: wildStat.roars,
+    last: wildStat.last, lastDist: wildStat.lastDist,
+    ctx: {
+      night: +wc(wildCtx.night, 0, 1).toFixed(2), rain: +wc(wildCtx.rain, 0, 1).toFixed(2),
+      cave: !!wildCtx.cave, shore: +wc(wildCtx.shore, 0, 1).toFixed(2),
+      listening: !!wildCtx.listening,
+    },
+    growlFile: sfxBuffers.has('growl'),
+  };
 }
