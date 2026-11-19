@@ -277,10 +277,11 @@ function placeOK(x, z, opts = {}) {
   if (r > 260 || r < 10) return false;
   if (h < (opts.minH ?? 2.4) || h > (opts.maxH ?? 46)) return false;
   if (trailDist(x, z) < (opts.nearTrail ? 1.5 : TRAIL_W + 1.5)) return false;
-  // 翻山垭口（凹口）内不长树（2026-11-19 用户要求）：山道段（z -56~-242）
+  // 翻山垭口（凹口）内不长树（2026-11-19 用户要求）：山道段（z -56~-204）
   // 小径两侧 10m 内全部清空——踩踏带本身宽 22m，旧规则只避让中心 6.7m，
   // 坑洼山石道两侧仍会长出树，破坏"裸岩垭口"的观感
-  if (z < -56 && z > -242 && trailDist(x, z) < TRAIL_W + 10) return false;
+  // 2026-11-19g：北屏峰封谷后山道止于 z≈-204，更北的高山让坡度过滤自然管
+  if (z < -56 && z > -204 && trailDist(x, z) < TRAIL_W + 10) return false;
   if (dist2(x, z, SPAWN.x, SPAWN.z) < (opts.nearTrail ? 3.75 : 15)) return false;
   if (dist2(x, z, RAFT.x, RAFT.z) < 16.25) return false;
   if (dist2(x, z, CABIN.x, CABIN.z) < 21.25) return false; // 林中木屋空地不长树

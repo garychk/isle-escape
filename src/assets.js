@@ -37,6 +37,7 @@ export const MANIFEST = {
   reef:      { file: 'reef.glb', anchor: 'origin' }, // 航拍扫描礁石小岛：原点=航拍水线，y<0 是水下礁盘，保持建模坐标不居中不缩放
   mutant:    { file: 'mutant.glb', height: 2.4 }, // 变异巨兽（替熊）：头朝 +Z，含 idle/swipe 两段骨骼动画
   zombie:    { file: 'zombie.glb', height: 1.4 }, // 峡谷僵尸（小怪）：头朝 +Z，含 idle/walk/swipe 三段骨骼动画
+  bholenath: { file: 'bholenath.glb', height: 9.5, yaw: 180 }, // 凹谷神像（坐姿湿婆，100 万面减到 9 万，源高 2.09m 放大到 9.5m；模型原生面朝 -Z，转 180 面朝谷口/南）
 };
 
 const cache = new Map();

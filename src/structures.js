@@ -1,6 +1,6 @@
 // 结构物：索桥 / 沼泽木板路 / 救生筏 / 遇难残骸 / 林中木屋
 import * as THREE from 'three';
-import { CFG, RAFT, BOAT, CABIN, SWAMP } from './config.js';
+import { CFG, RAFT, BOAT, CABIN, SWAMP, SHRINE } from './config.js';
 import { mulberry32, fbm, smoothstep } from './util.js';
 import { baseHeight, terrainY, surfaceRects, surfaceRamps } from './terrain.js';
 import { colliders } from './flora.js';
@@ -29,7 +29,52 @@ export function buildStructures(scene) {
   buildWreck(g);
   buildCabin(g);
   buildLandmarks(g);
+  buildShrine(g);
   return g;
+}
+
+// ================= 凹谷神像（bholenath.glb，2026-11-19g） =================
+// 北屏峰封谷后，凹谷尽头成为"死谷圣所"：石砌三层祭台 + 9.5m 坐姿湿婆神像，
+// 面朝谷口（南），玩家沿小径上到谷底迎面即见。
+function buildShrine(g) {
+  const sa = instance('bholenath');
+  if (!sa) { console.log('[shrine] bholenath.glb 缺失，跳过神像'); return; }
+  const px = SHRINE.x, pz = SHRINE.z;
+  const gy = terrainY(px, pz);
+  // 三层石砌祭台（逐级可踩上）
+  const steps = [
+    { s: 7.6, hgt: 0.55 }, { s: 6.0, hgt: 0.5 }, { s: 4.6, hgt: 0.45 },
+  ];
+  let sy = gy;
+  for (const st of steps) {
+    const half = st.s / 2;
+    const box = new THREE.Mesh(new THREE.BoxGeometry(st.s, st.hgt, st.s), rockMat);
+    box.position.set(px, sy + st.hgt / 2, pz);
+    box.castShadow = true; box.receiveShadow = true;
+    g.add(box);
+    surfaceRects.push({ x0: px - half, x1: px + half, z0: pz - half, z1: pz + half, y: sy + st.hgt, minY: sy - 0.4 });
+    sy += st.hgt;
+  }
+  // 神像本体（MANIFEST 已归一 9.5m、脚底=原点、面朝 +Z）
+  const statue = sa.wrap;
+  statue.position.set(px, sy + 0.02, pz);
+  statue.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  g.add(statue);
+  // 祭台四周散几块供石，破掉"三块整齐方盒子"的人工感
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * 6.283 + rng() * 0.7;
+    const rr = 4.6 + rng() * 1.6;
+    const rx = px + Math.cos(a) * rr, rz = pz + Math.sin(a) * rr;
+    const s = 0.5 + rng() * 0.7;
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(1, 1), rockMat);
+    rock.position.set(rx, terrainY(rx, rz) + s * 0.35, rz);
+    rock.scale.set(s, s * (0.7 + rng() * 0.5), s);
+    rock.rotation.set(rng() * 3, rng() * 6.283, rng() * 3);
+    rock.castShadow = true; rock.receiveShadow = true;
+    g.add(rock);
+  }
+  colliders.push({ x: px, z: pz, r: 2.6, type: 'shrine' });  // 祭台+像身整体挡人
+  console.log('[shrine] 神像 x' + px + ',' + pz + ' 台高 ' + (sy - gy).toFixed(2) + 'm 像高 ' + sa.height.toFixed(1) + 'm');
 }
 
 // ================= 场景地标：让沿途不再是一条空走廊 =================

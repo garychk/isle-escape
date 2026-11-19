@@ -1,6 +1,6 @@
 // 岛屿地形：高度场 / 区域判定 / 地形网格 / 水面
 import * as THREE from 'three';
-import { CFG, POND, SWAMP, MOUNT, RAFT, SPAWN, TRAIL, TRAIL_W, CABIN, MARBLE } from './config.js';
+import { CFG, POND, SWAMP, MOUNT, RAFT, SPAWN, TRAIL, TRAIL_W, CABIN, MARBLE, SHRINE } from './config.js';
 import { fbm, clamp, smoothstep, dist2, segDist2 } from './util.js';
 import { groundDetail, groundNormal } from './textures.js';
 import { createWaterMaterial, setWaterTime } from './water.js';
@@ -44,6 +44,19 @@ export function baseHeight(x, z) {
   h += 16 * Math.max(0, 1 - smoothstep(0, 42.5, dm)) * (0.7 + fbm(x * 0.09, z * 0.09, 2) * 0.6) * peakShape;
   // 山体侵蚀沟壑：打散过于光滑的锥体轮廓
   h += (fbm(x * 0.115, z * 0.115, 4) * 8.5 + fbm(x * 0.29, z * 0.29, 2) * 2.6) * mf;
+  // 北屏峰（2026-11-19g 用户要求）：凹谷不得直通北海岸——谷底尽头（z≈-208 起）
+  // 隆起一座横贯谷口的高山，把翻山垭口封成"死谷"；山北坡被沙滩混合带截断，
+  // 自然形成临海陡崖。高度与主山双峰同量级（总峰 ~60m），翻不过去。
+  {
+    const wallZ = smoothstep(-208, -236, z);                       // 谷底尽头往北隆起
+    const wallX = 1 - smoothstep(52, 82, Math.abs(x));             // 东西两端接回山体林地
+    const wf = wallZ * wallX;
+    if (wf > 0) {
+      const ridgeB = 1 - Math.abs(fbm(x * 0.03 + 7.1, z * 0.03 - 3.4, 3)) * 2;
+      h += (34 + ridgeB * 10 + fbm(x * 0.05, z * 0.05, 3) * 7) * wf * wf;
+      h += (fbm(x * 0.115 + 2.2, z * 0.115 + 5.5, 4) * 6 + fbm(x * 0.29, z * 0.29, 2) * 2) * wf;
+    }
+  }
   // 断魂谷峡谷（东西走向）——深谷剖面
   // 2026-11-19 修复：旧版「谷缘抬平」用 smoothstep(35,25,dzr) 把 dzr<25 的整片谷底
   // （含崖壁下段）强制抬到 6.2m——深渊消失变成平板、索桥成摆设、player 的坠落
@@ -73,14 +86,15 @@ export function baseHeight(x, z) {
       h += fbm(x * 0.14 + 9.1, z * 0.14 + 4.7, 4) * 1.7 * carve * (1 - carve) * 4.0;
     }
   }
-  // 翻山小径踩踏（2026-11-19e 双峰山后，引导小径从垭口翻山）：
+  // 翻山小径踩踏（2026-11-19g 改：小径止于凹谷神像，不再翻山通北岸——
+  // 北屏峰封谷后，北岸只能沿环岛滩涂绕行）：
   // 山体+丘陵+断魂谷北崖的原始坡局部可达 50~60°，玩家没法走。沿 TRAIL 山道段
   // 把高于"路线海拔包络"的部分削掉，中心削得最深、向两侧 5→13m 淡出，
   // 踩出一条 ≤25% 坡度的盘山小径（包络本身是 smoothstep 拼接，无折角）。
   {
     const tz = z;
-    if (tz < -35 && tz > -246) {   // 含断魂谷北崖（z≈-48..-56）：小径过桥即上山，崖壁也得踩平
-      const passY = 6.6 + 17.4 * smoothstep(-58, -150, tz) - 21 * smoothstep(-150, -238, tz);
+    if (tz < -33 && tz > -212) {   // 含断魂谷北崖（z≈-48..-56）：小径过桥即上山，崖壁也得踩平
+      const passY = 6.6 + 17.4 * smoothstep(-58, -150, tz) - 15.4 * smoothstep(-150, -202, tz);
       const tdd = trailDist(x, z);
       if (tdd < 22) {
         const tc = 1 - smoothstep(8, 22, tdd);
@@ -89,10 +103,13 @@ export function baseHeight(x, z) {
         //   低频鼓包/凹坑 ±1.6m（~9m 尺度）+ 中频碎石堆 ±0.7m + 高频碎砾 ±0.2m
         //   → 相邻坑洼典型落差 2~4m、极限 ~5m。连续坡面（非垂直台阶），
         //   玩家贴地可攀爬但翻山耗时明显增加。
-        const trail = passY + 1.2
+        // 桥头衔接（2026-11-19h）：+1.2 抬升与坑洼在 -33~-50 段淡入——旧版在桥北端
+        // 是一道 1.2m 的硬台阶（桥面 6.65 / 路面 7.8），加入坡度限制后玩家上不了岸。
+        const fade = smoothstep(-33, -50, tz);
+        const trail = passY + (1.2
           + fbm(x * 0.11, z * 0.11, 3) * 3.2
           + fbm(x * 0.30, z * 0.30, 2) * 1.4
-          + fbm(x * 0.8, z * 0.8, 2) * 0.4;
+          + fbm(x * 0.8, z * 0.8, 2) * 0.4) * fade;
         h += (trail - h) * tc;
       }
     }
@@ -152,6 +169,9 @@ export function baseHeight(x, z) {
   // 林中木屋空地压平（地基平台）
   const dc = dist2(x, z, CABIN.x, CABIN.z);
   if (dc < 30) { const c = smoothstep(30, 15, dc); h = h * (1 - c) + CABIN.padY * c; }
+  // 凹谷神像祭台（2026-11-19g）：谷底尽头的小块平整台地，神像立于其上
+  const dsh = dist2(x, z, SHRINE.x, SHRINE.z);
+  if (dsh < 14) { const c = smoothstep(14, 8, dsh); h = h * (1 - c) + (8.7 + fbm(x * 0.09, z * 0.09, 2) * 0.25) * c; }
   // 北岸筏点：挖出一处浅湾，让救生筏真正浮在水面上
   const dr = dist2(x, z, RAFT.x, RAFT.z);
   if (dr < 27.5) {

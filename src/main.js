@@ -1,7 +1,7 @@
 // 主入口：渲染 / 光照 / 状态机 / 主循环
 import * as THREE from 'three';
 import { CFG, SPAWN } from './config.js';
-import { buildTerrain, buildWaters, setWaterEnv, updateWaters, zoneState, groundHeight, waterDistance } from './terrain.js';
+import { buildTerrain, buildWaters, setWaterEnv, updateWaters, zoneState, groundHeight, baseHeight, waterDistance } from './terrain.js';
 import { buildFlora, colliders, updateFoliageWind, foliageWindState, setFoliageWindEnabled } from './flora.js';
 import { buildStructures, bridgeState, bridgePlanks, updateRaft, reefState } from './structures.js';
 import { BeastManager, makeParticles, updateParticles } from './animals.js';
@@ -207,6 +207,9 @@ window.__THREE = THREE;
 window.__qa = {
   env: () => env,
   teleport(x, z) { player.pos.set(x, groundHeight(x, z) + 1, z); },
+  // QA：地形采样（排查坡度/悬空用；groundHeight 含结构面，baseHeight 是纯地形）
+  gh: (x, z) => groundHeight(x, z),
+  bh: (x, z) => baseHeight(x, z),
   player: () => player,
   beasts: () => beasts,
   ui: () => ui,
