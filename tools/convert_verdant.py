@@ -123,8 +123,12 @@ def main():
                       nrm_is_png=True, rgh_is_png=True))
     oks.append(ground('rock', 'coastal_cliff_02_diff_2k.jpg',
                       'coastal_cliff_02_nor_gl_2k.exr', 'coastal_cliff_02_rough_2k.exr'))
-    oks.append(ground('sand', 'sand_rocks_small_01_diff_1k.jpg',
-                      'sand_rocks_small_01_nor_gl_1k.exr', 'sand_rocks_small_01_rough_1k.exr'))
+    # 【2026-11-19 已替换】sand 原用 sand_rocks_small_01（碎石鹅卵石，南岸看起来像乱石滩，不自然）。
+    # 现改用 Poly Haven "Dense Sand"（CC0）细黄沙：1K jpg 的 diff/nor_gl/rough，
+    # diff 做了暖黄提亮（R×1.14 G×1.07 B×0.90 +6，热带沙滩色），已直接写入 assets/tex/sand_*。
+    # 原碎石贴图备份在 assets_src/tex_backup_rocksand/（不参与构建）。勿用本函数重跑覆盖 sand，否则会退回碎石！
+    # oks.append(ground('sand', 'sand_rocks_small_01_diff_1k.jpg',
+    #                   'sand_rocks_small_01_nor_gl_1k.exr', 'sand_rocks_small_01_rough_1k.exr'))
 
     print('\n[2] 植被 RGBA (diff + alpha 合成)')
     leaves = [

@@ -33,7 +33,7 @@ void main(){
 const SKY_FRAG = `
 precision highp float;
 varying vec3 vDir;
-uniform vec3 uZen, uHor, uGround, uSunCol, uCloudD, uCloudL, uSunDir, uMoonDir;
+uniform vec3 uZen, uHor, uGround, uSunCol, uCloudD, uCloudL, uSunDir, uMoonDir, uFog;
 uniform float uNight, uCloud, uTime, uFlash, uSunVis;
 
 float hash21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -55,6 +55,12 @@ void main(){
   // 天空渐变
   vec3 col = mix(uHor, uZen, pow(clamp(h, 0.0, 1.0), 0.52));
   col = mix(col, uGround, smoothstep(0.015, -0.16, h));
+
+  // 大气霾带：地平线附近（含海面尽头的下半球）褪成雾色。
+  // 雾色与远景（海面/地形）被雾染成的颜色同源（见 sample() 的 lerp），
+  // 三者在地平线处同色 → 天空与海面模糊融合，看不出世界的边际。
+  float haze = 1.0 - smoothstep(-0.05, 0.22, h);
+  col = mix(col, uFog, haze * 0.96);
 
   // 太阳：本体 + 大气辉光
   float sd = max(dot(dir, uSunDir), 0.0);
@@ -222,7 +228,7 @@ export class Env {
         side: THREE.BackSide, depthWrite: false, fog: false,
         uniforms: {
           uZen: { value: this.mats.zen }, uHor: { value: this.mats.hor },
-          uGround: { value: this.mats.ground }, uSunCol: { value: this.mats.sunCol },
+          uGround: { value: this.mats.ground }, uFog: { value: this.mats.fog }, uSunCol: { value: this.mats.sunCol },
           uCloudD: { value: this.mats.cloudD }, uCloudL: { value: this.mats.cloudL },
           uSunDir: { value: this.sunDir }, uMoonDir: { value: this.moonDir },
           uNight: { value: 0 }, uCloud: { value: 0.3 }, uTime: { value: 0 },
@@ -296,6 +302,9 @@ export class Env {
     L(a.cloudD, b.cloudD, M.cloudD);
     L(a.cloudL, b.cloudL, M.cloudL);
     L(a.fog, b.fog, M.fog);
+    // 雾色向天空地平线色靠拢：远景被雾染成的颜色 = 天空地平线霾带的颜色，
+    // 水天同源，海面尽头才能与天空模糊融合（消除「看得见边际」的色差分界）
+    M.fog.lerp(M.hor, 0.45);
     this.night = a.night + (b.night - a.night) * k;
     // 地面色（地平线以下）跟随雾色但更暗
     M.ground.copy(M.fog).multiplyScalar(0.72);

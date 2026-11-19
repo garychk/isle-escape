@@ -9,11 +9,14 @@ const R_ISLAND = 290, R_COAST = 247.5; // 岛屿半径 / 海岸线开始（2026-
 const EXTRA_POOLS = [
   { x: 82.5, z: -165, r: 35, y: 5.6, depth: 3.4, w: 72.5, d: 67.5 },
   { x: 126.25, z: -102.5, r: 28.75, y: 4.7, depth: 2.7, w: 60, d: 57.5 },
-  { x: 68.75, z: -35, r: 33.75, y: 3.8, depth: 2.4, w: 70, d: 62.5 },
+  // 原 #3 (68.75,-35) 已删（2026-11-19）：它的 plane 压在断魂谷河道北坡上空，
+  // noFloat 渐隐水裙+矩形北缘直线边在河面上方形成"第二层水"（用户要求去掉，
+  // 只保留河流）；其盆地填底同时把河床抬到 1.4 使河水东段断流。删除后河道
+  // 贯通，地形回归峡谷剖面。
   { x: 135, z: 32.5, r: 38.75, y: 3.2, depth: 1.9, w: 80, d: 72.5 },
 ];
 
-// —— 基础地形高度（不含桥/木板/洞穴覆盖） ——
+// —— 基础地形高度（不含桥/木板/结构物平台覆盖） ——
 export function baseHeight(x, z) {
   const r = dist2(x, z, 0, 0);
   // 大陆轮廓：内岛抬高 → 沙滩环 → 海床
@@ -22,27 +25,77 @@ export function baseHeight(x, z) {
   h += 3.2 * smoothstep(256, 206, r);                        // 内陆基底抬升
   h += fbm(x * 0.011, z * 0.011, 4) * (2.5 + 9 * smoothstep(262, 162, r)); // 丘陵起伏
   h += fbm(x * 0.05, z * 0.05, 3) * 1.1;
-  // 山体（洞穴所在）：主峰 + 次级山脊
+  // 山体（2026-11-19e 穿山峡谷移除，合并为一座双峰山）：
+  // 左右两座山头（x≈±34），中间鞍部凹进去——但鞍部仍保留 ~32% 峰高，
+  // 是海拔十几米的垭口（远高于周围林地），引导小径从垭口翻山到北岸。
   const dm = dist2(x, z, MOUNT.x, MOUNT.z);
   const mf = 1 - smoothstep(60, 105, dm);
   const ridge = 1 - Math.abs(fbm(x * 0.028 + 3, z * 0.028 - 7, 3)) * 2;
-  h += (40 + ridge * 16 + fbm(x * 0.055, z * 0.055, 3) * 12) * mf * mf;
-  h += 16 * Math.max(0, 1 - smoothstep(0, 42.5, dm)) * (0.7 + fbm(x * 0.09, z * 0.09, 2) * 0.6);
+  // 双峰塑形（沿 x 的 W 型）：两个山头全高，鞍部处峰值衰减到 52%，山体两翼归零。
+  // 山头中心 ±44、鞍部宽钟到 36m：凹口开阔（半宽 ~30m），两侧是草坡山肩而非峡谷壁。
+  const adx = Math.abs(x - MOUNT.x);
+  const peakShape = Math.max(
+    1 - smoothstep(12, 50, Math.abs(adx - 44)),          // 西山头
+    1 - smoothstep(12, 50, Math.abs(adx + 44)),          // 东山头
+    0.52 * (1 - smoothstep(0, 36, adx)),                 // 鞍部垭口（凹槽仍有高度）
+  );
+  h += (40 + ridge * 16 + fbm(x * 0.055, z * 0.055, 3) * 12) * mf * mf * peakShape;
+  // 中央锥体加高：同样沿双峰塑形衰减，避免鞍部中央再鼓出一个 16m 锥顶
+  h += 16 * Math.max(0, 1 - smoothstep(0, 42.5, dm)) * (0.7 + fbm(x * 0.09, z * 0.09, 2) * 0.6) * peakShape;
   // 山体侵蚀沟壑：打散过于光滑的锥体轮廓
   h += (fbm(x * 0.115, z * 0.115, 4) * 8.5 + fbm(x * 0.29, z * 0.29, 2) * 2.6) * mf;
-  // 山腹隧道开凿（贯穿山体，供洞穴通行）
-  if (Math.abs(x) < 15 && z < -55 && z > -225) {
-    const cx = smoothstep(13.75, 8, Math.abs(x));
-    const czm = smoothstep(-55, -67.5, z) * smoothstep(-225, -212.5, z);
-    const c = cx * czm;
-    if (c > 0) h = h * (1 - c) + (CFG.CAVE_Y - 0.5 + fbm(x * 0.09, z * 0.09, 2) * 0.35) * c;
-  }
-  // 断魂谷峡谷（东西走向）
-  const dzr = Math.abs(z + 7.5);
+  // 断魂谷峡谷（东西走向）——深谷剖面
+  // 2026-11-19 修复：旧版「谷缘抬平」用 smoothstep(35,25,dzr) 把 dzr<25 的整片谷底
+  // （含崖壁下段）强制抬到 6.2m——深渊消失变成平板、索桥成摆设、player 的坠落
+  // 判定（y<-8.5 拽回桥头）成死代码，且开凿半宽 40 一路吞到木屋地基造成假台阶。
+  // 现改为：谷底 dzr<14 全量开凿（-10.2 起伏河床，保证低于 -8.5 坠落线），
+  // dzr 14~24 陡壁渐出，dzr>24 回归自然地形（≈6m，与索桥桥头/木屋地基同高）。
+  // 2026-11-19b 自然化（用户反馈"河道有直角、太直，像人工开挖"）：
+  //   a) 中线随 fbm 东西蜿蜒 ±4m（fbm 3 阶 ±0.5 × 8）——旧版横断面沿 x 恒定、
+  //      两岸平行如引水渠。蜿蜒在 |x|<18 锁死为 0（索桥桥位不动）；
+  //      蜿蜒上限保证木屋处 dzr ≥ 22.9 > 23.5-wob，木屋地基仍不被啃。
+  //   b) 谷身向两端渐隐（x 100→133 淡出）——旧版 |x|<135 一刀切，谷道两端
+  //      是垂直端墙+直角水面；现在河道以自然坡地收尾，水线随地形闭合。
+  const zc = -7.5 + fbm(x * 0.02 + 9.3, 4.7, 3) * 8 * smoothstep(18, 48, Math.abs(x));
+  const dzr = Math.abs(z - zc);
   if (dzr < 40 && Math.abs(x) < 135) {
-    const carve = smoothstep(40, 12.5, dzr);
-    h = h * (1 - carve) + (-9.5 + fbm(x * 0.1, z * 0.1, 2) * 0.9) * carve;
-    h = h * (1 - smoothstep(35, 25, dzr)) + 6.2 * smoothstep(35, 25, dzr); // 谷缘抬平
+    // 崖缘沿东西向蜿蜒（±2.5m）：整条峡谷不再是同一个均匀断面的"拉坯"感。
+    // e0 上限压在 22，保证索桥桥头（dzr=25）与木屋（dzr≈27）处 carve 恒为 0、地面不被啃。
+    const wob = fbm(x * 0.04 + 3.7, 2.3, 3) * 5.0;
+    const taper = 1 - smoothstep(100, 133, Math.abs(x));
+    const carve = smoothstep(22 + wob * 0.6, 13 + wob * 0.6, dzr) * taper;
+    if (carve > 0) {
+      // fbm 3 阶实际输出 ±0.5 左右：振幅按此标定，保证玩家视角内谷底有冲沟起伏
+      // （峰值 -9.2 仍低于 -8.5 坠落线，谷底任何位置坠入都会被拽回桥头）
+      const floorY = -10.2 + fbm(x * 0.09, z * 0.09, 3) * 1.4 + fbm(x * 0.22, z * 0.22, 2) * 0.45;
+      h = h * (1 - carve) + floorY * carve;
+      // 崖面高频起伏：冲沟/凸岩只在崖壁过渡带（carve≈0.5）出现，崖顶谷底不受影响
+      h += fbm(x * 0.14 + 9.1, z * 0.14 + 4.7, 4) * 1.7 * carve * (1 - carve) * 4.0;
+    }
+  }
+  // 翻山小径踩踏（2026-11-19e 双峰山后，引导小径从垭口翻山）：
+  // 山体+丘陵+断魂谷北崖的原始坡局部可达 50~60°，玩家没法走。沿 TRAIL 山道段
+  // 把高于"路线海拔包络"的部分削掉，中心削得最深、向两侧 5→13m 淡出，
+  // 踩出一条 ≤25% 坡度的盘山小径（包络本身是 smoothstep 拼接，无折角）。
+  {
+    const tz = z;
+    if (tz < -35 && tz > -246) {   // 含断魂谷北崖（z≈-48..-56）：小径过桥即上山，崖壁也得踩平
+      const passY = 6.6 + 17.4 * smoothstep(-58, -150, tz) - 21 * smoothstep(-150, -238, tz);
+      const tdd = trailDist(x, z);
+      if (tdd < 22) {
+        const tc = 1 - smoothstep(8, 22, tdd);
+        // 山道面 = 海拔包络 + 大型山石坑洼（2026-11-19f 用户要求：不要贴皮平滑，
+        // 要 2~5m 落差的坑洼山石，增加翻山难度）：
+        //   低频鼓包/凹坑 ±1.6m（~9m 尺度）+ 中频碎石堆 ±0.7m + 高频碎砾 ±0.2m
+        //   → 相邻坑洼典型落差 2~4m、极限 ~5m。连续坡面（非垂直台阶），
+        //   玩家贴地可攀爬但翻山耗时明显增加。
+        const trail = passY + 1.2
+          + fbm(x * 0.11, z * 0.11, 3) * 3.2
+          + fbm(x * 0.30, z * 0.30, 2) * 1.4
+          + fbm(x * 0.8, z * 0.8, 2) * 0.4;
+        h += (trail - h) * tc;
+      }
+    }
   }
   // 东侧低洼水潭群：用多个不规则盆地取代人工溪流，水面严格由盆地边缘承托。
   for (const p of EXTRA_POOLS) {
@@ -108,10 +161,6 @@ export function baseHeight(x, z) {
   return h;
 }
 
-// 洞穴走廊覆盖（山腹隧道，x∈±11, z∈-220..-57.5）
-export function inCaveCorr(x, z) { return Math.abs(x) < 11.25 && z < -57.5 && z > -220; }
-export function inCaveDark(x, z) { return Math.abs(x) < 12.5 && z < -72.5 && z > -205; }
-
 // —— 可站立面注册（结构物地板 / 门廊 / 坡道楼梯等） ——
 // rects: {x0,x1,z0,z1,y,minY} 常高平台；ramps: {x0,x1,z0,z1,ax0,ay0,ax1,ay1} 沿 x 线性坡
 // minY = 面存在的最低"脚下高度"：低于它的调用者（如从桥下/楼梯下走过）不会被吸上去。
@@ -135,7 +184,7 @@ function surfaceHeight(x, z, curY = Infinity) {
   return hit ? best : null;
 }
 
-// 供行走的地面高度（含索桥/木板路/洞底/结构物平台覆盖）
+// 供行走的地面高度（含索桥/木板路/结构物平台覆盖）
 export function groundHeight(x, z, bridgeSway = 0, curY = Infinity) {
   let h = baseHeight(x, z);
   // 索桥桥面
@@ -144,8 +193,6 @@ export function groundHeight(x, z, bridgeSway = 0, curY = Infinity) {
   else if (Math.abs(x - SWAMP.x) < 2.4 && z < 120 && z > 13) h = Math.max(baseHeight(x, z), CFG.SWAMP_Y + 0.55);
   // 北岸栈桥（尾端压到渔船甲板边缘）
   else if (Math.abs(x - (RAFT.x - 2.4)) < 1.02 && z < RAFT.z + 12.6 && z > RAFT.z - 1.0) h = 0.96;
-  // 洞底
-  if (inCaveCorr(x, z)) h = CFG.CAVE_Y + fbm(x * 0.05, z * 0.05, 2) * 0.4;
   // 结构物平台（木屋地板/门廊/楼梯等）
   const s = surfaceHeight(x, z, curY);
   if (s !== null && s > h) h = s;
@@ -174,6 +221,7 @@ export function terrainY(x, z) {
 export function trailDist(x, z) { // 到引导小径的距离
   let d = 1e9;
   for (let i = 0; i < TRAIL.length - 1; i++) {
+    if (TRAIL[i + 1].brk) continue;         // 折线断点：主线与支线不相连
     d = Math.min(d, segDist2(x, z, TRAIL[i].x, TRAIL[i].z, TRAIL[i + 1].x, TRAIL[i + 1].z));
   }
   return d;
@@ -185,7 +233,7 @@ export function trailDist(x, z) { // 到引导小径的距离
 const C_SAND = new THREE.Color(0xcbb894), C_GRASS = new THREE.Color(0x6d6c46),
       C_GRASS2 = new THREE.Color(0x8b8652), C_ROCK = new THREE.Color(0x8a8478),
       C_TRAIL = new THREE.Color(0x97785a), C_MUD = new THREE.Color(0x6b5c46),
-      C_CAVE = new THREE.Color(0x6a6258), C_MOSS = new THREE.Color(0x53643a),
+      C_MOSS = new THREE.Color(0x53643a),
       C_WETSAND = new THREE.Color(0xa89a78), C_HUMUS = new THREE.Color(0x82694c);
 
 export function buildTerrain(scene) {
@@ -197,6 +245,9 @@ export function buildTerrain(scene) {
   // splat 权重：0=林地 1=泥土/小径 2=岩石 3=沙滩，供真实 PBR 的 4 路混合使用
   // （程序化材质回退时忽略该属性）
   const splats = new Float32Array(pos.count * 4);
+  // 山道岩化（2026-11-19）：凹口翻山段的小径与山体共用同一套湿岩材质，
+  // 以独立 float 属性传给 shader（splat 四通道已满，且泥土通道还承担腐殖土/沼泽）
+  const trailRocks = new Float32Array(pos.count);
   const c = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
@@ -219,15 +270,20 @@ export function buildTerrain(scene) {
     // 更细的落叶斑块，打散“整片草地”的均质感
     const hum2 = fbm(x * 0.16 - 51, z * 0.16 + 27, 2);
     if (hum2 > 0.26) c.lerp(C_HUMUS, smoothstep(0.26, 0.80, hum2) * 0.36);
-    // 小径泥土
+    // 小径泥土（山道段走高处门控：海拔 >7.5m 的翻山段转岩石色，
+    // 与 shader 里的 trailRock 门控保持同一阈值，程序化回退材质也一致）
     const td = trailDist(x, z);
-    if (td < TRAIL_W + 2) c.lerp(C_TRAIL, smoothstep(TRAIL_W + 1.6, TRAIL_W * 0.35, td) * 0.7);
+    const trailRockAmt = smoothstep(TRAIL_W + 2.5, TRAIL_W * 0.3, td)
+      * smoothstep(7.5, 12.5, h) * 0.92;
+    if (td < TRAIL_W + 2) {
+      c.lerp(trailRockAmt > 0.25 ? C_ROCK : C_TRAIL,
+        smoothstep(TRAIL_W + 1.6, TRAIL_W * 0.35, td) * 0.7);
+    }
     // 沼泽泥
     if (ds_(x, z) < 50) c.lerp(C_MUD, smoothstep(50, 30, ds_(x, z)) * 0.8);
-    // 洞内暗色
-    if (inCaveCorr(x, z)) c.lerp(C_CAVE, 0.85);
-    // 岩石（陡坡 / 高山）
-    const rockAmt = clamp(smoothstep(0.5, 1.0, slope) + smoothstep(26, 40, h), 0, 1);
+    // 岩石（陡坡 / 高山）：40° 以下坡面保留草被，49°+ 才转裸岩——
+    // 山体凹口两侧 40~45° 草坡不再是"岩石峡谷壁"的观感
+    const rockAmt = clamp(smoothstep(0.72, 1.15, slope) + smoothstep(26, 40, h), 0, 1);
     c.lerp(C_ROCK, rockAmt);
     // 沙滩（海岸 + 水塘岸）
     const rd = dist2(x, z, 0, 0);
@@ -250,13 +306,15 @@ export function buildTerrain(scene) {
       w[idx] += a;
     };
     const edge = fbm(x * 0.13 + 61, z * 0.13 - 23, 2) * 0.07; // 打散材质边界
-    // 泥土：引导小径 / 腐殖土斑块 / 沼泽泥泞
+    // 泥土：引导小径（仅低海拔段）/ 腐殖土斑块 / 沼泽泥泞
     const trailAmt = smoothstep(TRAIL_W + 2.5, TRAIL_W * 0.3, td) * 0.9;
     const humusAmt = smoothstep(0.20, 0.72, hum) * 0.52 + smoothstep(0.26, 0.80, hum2) * 0.18;
     const mudAmt = smoothstep(52, 26, ds_(x, z)) * 0.72;
-    cover(1, Math.max(trailAmt, humusAmt, mudAmt) + edge);
-    // 岩石：陡坡 / 高山 / 洞穴走廊
-    cover(2, rockAmt * 1.06 + (inCaveCorr(x, z) ? 0.7 : 0) + edge);
+    cover(1, Math.max(trailAmt * (1 - smoothstep(7.5, 12.5, h)), humusAmt, mudAmt) + edge);
+    // 山道岩化：高处翻山段交给 shader 的 rockW（与山体同一湿岩材质）
+    trailRocks[i] = trailRockAmt;
+    // 岩石：陡坡 / 高山
+    cover(2, rockAmt * 1.06 + edge);
     // 沙滩：环岛海岸 + 水塘岸（沿用旧顶点色的判定条件）
     let sandAmt = 0;
     if (rd > 178) sandAmt = smoothstep(4.6, 1.7, h) * smoothstep(178, 196, rd);
@@ -267,6 +325,7 @@ export function buildTerrain(scene) {
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.setAttribute('splat', new THREE.BufferAttribute(splats, 4));
+  geo.setAttribute('trailrock', new THREE.BufferAttribute(trailRocks, 1));
   geo.computeVertexNormals();
   const detail = groundDetail();
   detail.repeat.set(70, 70);
@@ -291,7 +350,7 @@ function ds_(x, z) { return dist2(x, z, SWAMP.x, SWAMP.z); }
 // 水深图是让"平面水"显出浅滩、岸线白沫和水色层次的关键（纯贴图做不到）。
 // basinR：盆地区半径，烘焙进 alpha 通道。水面矩形往往比挖了盆地的范围大，
 // 超出盆地的部分盖在陆地起伏上会凭空浮出一层水（悬空水），掩码把它们直接透明掉。
-function depthMap(w, d, cx, cz, y, scale, res, basinR) {
+function depthMap(w, d, cx, cz, y, scale, res, basinR, maskFn, noFloat) {
   const data = new Uint8Array(res * res * 4);
   for (let j = 0; j < res; j++) {
     const z = cz + (j / (res - 1) - 0.5) * d;
@@ -302,10 +361,28 @@ function depthMap(w, d, cx, cz, y, scale, res, basinR) {
       data[k] = data[k + 1] = data[k + 2] = (v * 255) | 0;
       // 盆地掩码：盆区内 = 1，超出盆地半径 ±4% 平滑过渡到 0（海面不传 basinR 则全 1）。
       // 渐隐带宽要窄：掠射角下宽渐隐带会像一块灰板浮在林地上。
-      const m = basinR
-        ? 1 - smoothstep(basinR * 0.96, basinR * 1.04, Math.hypot(x - cx, z - cz))
-        : 1;
-      data[k + 3] = (m * 255) | 0;
+      // maskFn：非圆形水域（如断魂谷河道）用自定义掩码取代径向盆地——
+      //   这里传入"水线掩码"：地形高于水面 +0.45m 即为 0，避免半透明水膜爬上崖壁。
+      // noFloat：防悬空掩码——内陆水面（沼泽/水潭）的径向盆地不知道远处山谷被开挖，
+      //   地形低于 水面-noFloat 时水体悬在空中（沼泽曾整片飘在断魂谷上空 10m）。
+      //   地形回落到 y-noFloat 以下 1m 内平滑隐掉；海面不启用（深海必须可见）。
+      let m = maskFn ? maskFn(x, z)
+        : basinR
+          ? 1 - smoothstep(basinR * 0.96, basinR * 1.04, Math.hypot(x - cx, z - cz))
+          : 1;
+      if (noFloat) m *= smoothstep(y - noFloat - 1.0, y - noFloat, baseHeight(x, z));
+      if (basinR) {
+        // 坡度门（2026-11-19 用户：水漂浮在陆地上）——水面爬上陡坡（崖壁/山脚坡面）
+        // 会像一层半透明膜浮在干地上：坡面低于水位的那段被同一水位面盖住。
+        // 合法岸线都是缓坡（水塘/沼泽 p99≤0.34，东潭 p99≤0.47）；
+        // 穿帮段坡度 0.8~3（北潭山脚崖壁、沼泽爬上河道南岸）。门限 0.42~0.60。
+        const e = 1.2;
+        const sl = Math.hypot(
+          baseHeight(x + e, z) - baseHeight(x - e, z),
+          baseHeight(x, z + e) - baseHeight(x, z - e)) / (2 * e);
+        m *= 1 - smoothstep(0.42, 0.60, sl);
+      }
+      data[k + 3] = (clamp(m, 0, 1) * 255) | 0;
     }
   }
   const t = new THREE.DataTexture(data, res, res, THREE.RGBAFormat);
@@ -319,8 +396,9 @@ const waters = [];
 // 给水面挂上天空环境贴图（PMREM），让海面真正映出天色而不是一片死绿
 export function setWaterEnv(tex) {
   if (!tex) return;
-  // 大海主要映天光；水塘/沼泽被树冠遮着，反射要弱，否则会变成一片惨白
-  const inten = [0.92, 0.26, 0.20];
+  // 大海主要映天光；水塘/河道/沼泽被树冠遮着，反射要弱，否则会变成一片惨白
+  // 顺序与 buildWaters 的 mk 顺序一致：0 海 1 水塘 2 断魂谷河道 3 沼泽 4+ 东侧水潭
+  const inten = [0.92, 0.26, 0.24, 0.20];
   waters.forEach((m, i) => {
     m.envMap = tex;
     m.envMapIntensity = inten[i] ?? 0.3;
@@ -331,7 +409,7 @@ export function setWaterEnv(tex) {
 
 export function buildWaters(scene) {
   const mk = (o) => {
-    const depth = depthMap(o.w, o.d, o.x, o.z, o.y, o.depthScale, o.depthRes, o.basin);
+    const depth = depthMap(o.w, o.d, o.x, o.z, o.y, o.depthScale, o.depthRes, o.basin, o.maskFn, o.noFloat);
     const m = createWaterMaterial({
       depth, center: [o.x, o.z], size: [o.w, o.d],
       deep: o.deep, shallow: o.shallow, opacity: o.opacity,
@@ -339,6 +417,7 @@ export function buildWaters(scene) {
       nrmScale: o.nrmScale, ripple: o.ripple, wave: o.wave, foam: o.foam,
       waveFoam: o.waveFoam,
       sunGloss: o.sunGloss, sunStrength: o.sunStrength,
+      killInland: o.killInland,   // 海面内陆防漏遮罩半径（见 water.js FRAG_BODY 注释）
     });
     // 海面要足够密才能托住 27m 短浪（192 段 ≈ 5.5m/格），否则波峰被削成三角锯齿
     const g = new THREE.PlaneGeometry(o.w, o.d, o.seg, o.seg);
@@ -350,33 +429,56 @@ export function buildWaters(scene) {
     waters.push(m);
     return mesh;
   };
-  // 大海：Gerstner 主浪 + 强天光反射；wave 是浪幅倍率，风力由 env 每帧叠加
+  // 大海：Gerstner 主浪 + 强天光反射；wave 是浪幅倍率，风力由 env 每帧叠加。
+  // killInland：内陆遮罩——海面矩形盖全球，凡内陆地形低于海平面处（断魂谷河床、
+  // 丘陵随机洼地）旧版都会被灌进蓝色海水；现在 r<238 整片隐掉，内陆水一律
+  // 由下方的水塘/河道/沼泽等淡水 plane 承载（阈值推导见 water.js FRAG_BODY 注释）
   mk({ w: CFG.WORLD * 1.9, d: CFG.WORLD * 1.9, x: 0, z: 0, y: CFG.SEA_Y, seg: 192,
-    depthScale: 7, depthRes: 512,
+    depthScale: 7, depthRes: 512, killInland: [238, 248],
     deep: 0x0d3440, shallow: 0x3e8c8b, opacity: 0.93, rough: 0.17, metalness: 0.16,
     nrmScale: 0.032, ripple: 0.85, wave: 1.3, foam: 0.7, waveFoam: 0.62,
     sunGloss: 110, sunStrength: 0.85 });
   // 水塘：树荫下的静水，只留极轻的呼吸起伏，不能有海浪
   mk({ w: 140, d: 130, x: POND.x, z: POND.z, y: CFG.POND_Y, seg: 48, basin: 52.5,
-    depthScale: 1.8, depthRes: 192,
+    depthScale: 1.8, depthRes: 192, noFloat: 2.2,
     deep: 0x173c33, shallow: 0x4c7d61, opacity: 0.88, rough: 0.18, metalness: 0.05,
     nrmScale: 0.10, ripple: 0.55, wave: 0.12, foam: 0.75, waveFoam: 0,
     sunGloss: 70, sunStrength: 0.35 });
-  // 沼泽：浑水、几乎无浪
+  // 断魂谷内陆河（2026-11-19）：谷底 -10.2 低于海平面，旧版靠全球海面 plane 顺带
+  // 灌水——蓝色海水+海浪直接出现在内陆。现由独立淡水河 plane 承载，与水塘/水潭
+  // 同一套淡水资源（同色同浪），衔接自然。
+  // 掩码用水线：地形高于水面 +0.45m 即隐掉，水面只留在真实河床里，不爬崖壁。
+  // depthScale 由 7 放宽到 28：谷底恒深 10m 会把深度打到饱和 → 深水色偏蓝青+天光
+  // 反射整条河读成"钢蓝色海"，与旁边水塘的浅绿判若两物；放宽后中游 ≈0.36 深度、
+  // 岸边趋 0，渲染出与水潭一致的浅绿渐变（用户验收基准：像水塘一样自然）。
+  mk({ w: 280, d: 68, x: 0, z: -7.5, y: CFG.SEA_Y, seg: 64, basin: null,
+    depthScale: 28, depthRes: 256,
+    maskFn: (x, z) => 1 - smoothstep(CFG.SEA_Y - 0.25, CFG.SEA_Y + 0.45, baseHeight(x, z)),
+    deep: 0x193f35, shallow: 0x66836a, opacity: 0.9, rough: 0.25, metalness: 0.025,
+    nrmScale: 0.12, ripple: 0.46, wave: 0.10, foam: 0.9, waveFoam: 0,
+    sunGloss: 58, sunStrength: 0.22 });
+  // 沼泽：浑水、几乎无浪；noFloat=1.0（沼泽底 2.1、水面 2.6，正常水深 ≤0.7）——
+  // basin 半径 65 曾把水面矩形伸到断魂谷开凿区上空，谷坡被挖到 -2~-7m 处
+  // 沼泽水整片悬空 10m，其 basin 渐隐边就是"两种水硬拼接"的生硬边界
   mk({ w: 165, d: 172.5, x: SWAMP.x, z: SWAMP.z, y: CFG.SWAMP_Y, seg: 48, basin: 65,
-    depthScale: 1.1, depthRes: 192,
+    depthScale: 1.1, depthRes: 192, noFloat: 1.0,
     deep: 0x26331d, shallow: 0x5c6a38, opacity: 0.94, rough: 0.28, metalness: 0.03,
     nrmScale: 0.14, ripple: 0.38, wave: 0.06, foam: 0.4, waveFoam: 0,
     sunGloss: 55, sunStrength: 0.15 });
   for (const p of EXTRA_POOLS) {
-    mk({ w: p.w, d: p.d, x: p.x, z: p.z, y: p.y, seg: 32, basin: p.r,
-      depth: depthMap(p.w, p.d, p.x, p.z, p.y, p.depth + 0.8, 128, p.r),
+    // noFloat=p.depth：水潭压在山地/峡谷边缘，地形被开挖处不再悬空挂水裙
+    // 东潭 (135,32.5) 与沼泽 basin 重叠：y 由 3.2 降到 2.45（低于沼泽 2.6），重叠区
+    // 沼泽在上层遮住水潭、basin 渐隐处水潭同色系水面自然接续，消灭双层水面硬边
+    const y4 = p.x === 135 ? 2.45 : p.y;
+    mk({ w: p.w, d: p.d, x: p.x, z: p.z, y: y4, seg: 32, basin: p.r,
+      depth: depthMap(p.w, p.d, p.x, p.z, y4, p.depth + 0.8, 128, p.r, null, p.depth),
       depthScale: p.depth + 0.8, depthRes: 128,
       deep: 0x193f35, shallow: 0x66836a, opacity: 0.9, rough: 0.25, metalness: 0.025,
       nrmScale: 0.12, ripple: 0.46, wave: 0.10, foam: 0.9, waveFoam: 0,
       sunGloss: 58, sunStrength: 0.22 });
   }
 }
+
 export function updateWaters(t) { setWaterTime(t); }
 
 // —— 区域判定（供游戏逻辑） ——
@@ -384,10 +486,11 @@ export function zoneState(x, z) {
   const pondD = dist2(x, z, POND.x, POND.z);
   const swampD = ds_(x, z);
   const inWater = pondD < 30 && baseHeight(x, z) < CFG.POND_Y - 0.15;
-  const inSwampWater = swampD < 44 && baseHeight(x, z) < CFG.SWAMP_Y + 0.2 && !inCaveCorr(x, z);
+  const inSwampWater = swampD < 44 && baseHeight(x, z) < CFG.SWAMP_Y + 0.2;
   const onBoard = Math.abs(x - SWAMP.x) < 2.4 && z < 120 && z > 13;
   const deep = dist2(x, z, 0, 0) > CFG.DEEP_R || (baseHeight(x, z) < -1.5 && dist2(x, z, 0, 0) > 268);
-  return { pondD, swampD, inWater, inSwampWater, onBoard, deep, cave: inCaveDark(x, z) };
+  // cave 字段保留给环境音/脚步接口：山体垭口露天，恒为 false（不再有封闭暗区）
+  return { pondD, swampD, inWater, inSwampWater, onBoard, deep, cave: false };
 }
 
 // —— 到水面的距离场（供水流环境音） ——

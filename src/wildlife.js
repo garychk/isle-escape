@@ -366,13 +366,14 @@ const nearWater = (x, z) => Math.min(dist2(x, z, POND.x, POND.z), dist2(x, z, SW
 
 // ---------------- 主体 ----------------
 const SPECS = [
-  { key: 'lizard', parts: lizardParts, n: 110, mat: { wave: 0.030 }, size: [1.30, 1.85],
+  // 2026-11-19 用户要求去掉小蛇/乌龟等地面小动物：全部 n:0 不再生成（代码保留可随时恢复）
+  { key: 'lizard', parts: lizardParts, n: 0, mat: { wave: 0.030 }, size: [1.30, 1.85],
     pick: () => randLand((x, z) => dist2(x, z, 0, 0) < 200, 0.84), label: '雨林蜥蜴' },
-  { key: 'snake', parts: snakeParts, n: 46, mat: { wave: 0.115 }, size: [1.15, 1.75],
+  { key: 'snake', parts: snakeParts, n: 0, mat: { wave: 0.115 }, size: [1.15, 1.75],
     pick: () => randLand((x, z) => nearWater(x, z) < 100 || dist2(x, z, 0, 0) < 160, 0.80), label: '草蛇' },
-  { key: 'tortoise', parts: tortoiseParts, n: 36, mat: { wave: 0.008 }, size: [1.20, 1.70],
+  { key: 'tortoise', parts: tortoiseParts, n: 0, mat: { wave: 0.008 }, size: [1.20, 1.70],
     pick: () => randLand((x, z) => nearWater(x, z) < 120, 0.82), label: '陆龟' },
-  { key: 'croc', parts: crocParts, n: 7, mat: { wave: 0.14 }, size: [0.55, 0.75],
+  { key: 'croc', parts: crocParts, n: 0, mat: { wave: 0.14 }, size: [0.55, 0.75],
     pick: () => randLand((x, z) => nearWater(x, z) < 62 && nearWater(x, z) > 22, 0.70), label: '沼泽鳄' },
 ];
 
@@ -387,6 +388,7 @@ export function buildWildlife(scene) {
 
   // —— 地面爬行动物 ——
   for (const sp of SPECS) {
+    if (!sp.n) continue;            // 数量 0：跳过生成，不创建 mesh
     const geo = combine(sp.parts());
     const mat = wildlifeMaterial(sp.mat);
     const mesh = new THREE.InstancedMesh(geo, mat, sp.n);
@@ -558,7 +560,7 @@ export function buildWildlife(scene) {
       dummy.updateMatrix();
       a.mesh.setMatrixAt(a.i, dummy.matrix);
     }
-    for (const sp of SPECS) ground[sp.key].mesh.instanceMatrix.needsUpdate = true;
+    for (const sp of SPECS) if (ground[sp.key]) ground[sp.key].mesh.instanceMatrix.needsUpdate = true;
 
     // —— 鸟类 ——
     let visCount = 0;
@@ -674,7 +676,7 @@ export function buildWildlife(scene) {
       }
       return {
         enabled: true,
-        ground: Object.fromEntries(SPECS.map(s => [s.key, ground[s.key].list.length])),
+        ground: Object.fromEntries(SPECS.map(s => [s.key, ground[s.key] ? ground[s.key].list.length : 0])),
         birds: birds.length, birdVisible: lastVisible,
         total: agents.length + birds.length,
         meshes: meshes.length, shaderTime: +TIME_U.value.toFixed(2),

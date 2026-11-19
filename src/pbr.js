@@ -2,6 +2,7 @@
 //   assets/tex/ 下 4 组地面 PBR（albedo / normal / roughness）+ 植被 RGBA + sky.hdr
 //   全部文件缺失时静默回退到原程序化材质，游戏照常启动。
 import * as THREE from 'three';
+import { CABIN } from './config.js';
 
 const TILE = 70; // 与旧 groundDetail 的 repeat 保持一致：560m / 70 ≈ 8m 一个平铺
 const GROUPS = ['forest', 'dirt', 'rock', 'sand'];
@@ -62,9 +63,17 @@ export async function loadPBR(onStep) {
     foliage[k] = t;
   }));
   if (onStep) onStep();
+  // 巨树树皮（Quixel Alder Tree Trunk）：albedo + normal，平铺包裹
+  // （repeat 会被 flora.js 克隆后重设，这里的 TILE 无效但无害）
+  const bole = {};
+  await Promise.all([
+    loadTex('bole_alder.jpg', true).then(t => { if (t) bole.diff = t; }),
+    loadTex('bole_alder_n.jpg', false).then(t => { if (t) bole.nrm = t; }),
+  ]);
   console.log('[pbr] 地面组:', ok ? Object.keys(ground).join(',') : '(回退)',
-    '| 植被:', Object.keys(foliage).join(',') || '(回退)');
-  return { ground: ok ? ground : null, foliage };
+    '| 植被:', Object.keys(foliage).join(',') || '(回退)',
+    '| 巨树皮:', (bole.diff && bole.nrm) ? 'alder' : '(回退)');
+  return { ground: ok ? ground : null, foliage, bole: (bole.diff && bole.nrm) ? bole : null };
 }
 
 // ---------------------------------------------------------------------------
@@ -74,30 +83,147 @@ export async function loadPBR(onStep) {
 // ---------------------------------------------------------------------------
 const FRAG_DECL = `
 varying vec4 vSplat;
+varying float vTrailRock;
+varying vec3 vRockWorldPos;
+varying vec3 vRockWorldNrm;
 uniform sampler2D sD0, sD1, sD2, sD3;
 uniform sampler2D sN0, sN1, sN2, sN3;
 uniform sampler2D sR0, sR1, sR2, sR3;
-vec3 splatAlbedo(vec2 uv) {
-  // 该素材包偏黄褐（南非干草原），逐层轻微往热带绿/冷灰校正
+// 峡谷区域权重：断魂谷(z≈-7.5,东西向)——穿山峡谷已移除（山体合并为双峰）
+float gorgeW(vec3 wp) {
+  float ravine = (1.0 - smoothstep(28.0, 38.0, abs(wp.z + 7.5)))
+               * (1.0 - smoothstep(118.0, 134.0, abs(wp.x)));
+  return clamp(ravine, 0.0, 1.0);
+}
+// 峡谷湿岩权重：峡谷区域刷湿岩，但林中木屋空地半径 14~26m 内淡出，
+// 让木屋周围保持森林地表（草地/腐殖土），只有断崖陡壁仍走湿岩。
+// vTrailRock：凹口翻山山道段——与山体共用同一套湿岩材质（2026-11-19 用户要求）。
+float rockW(vec3 wp, float steep) {
+  float gw = gorgeW(wp) * smoothstep(14.0, 26.0, distance(wp.xz, vec2(${CABIN.x.toFixed(1)}, ${CABIN.z.toFixed(1)})));
+  return clamp(max(max(gw, smoothstep(0.38, 0.50, steep)), vTrailRock), 0.0, 1.0);
+}
+// 与山体完全相同的 rock 贴图（sD2/sN2/sR2）：三平面投影消除陡壁竖纹，≈3.3m 平铺
+// 注意：texture.repeat 只作用于几何 UV（vMapUv），对这里手写的 texture2D 采样无效，
+// 平铺周期必须直接写进 scale —— 旧值 1/210 实为 210m 一张，整张贴图拉成平滑色块（假）。
+const float ROCK_SCALE = 0.30;
+// —— GLSL 价值噪声（宏观调制用）——
+float hash21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
+             mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm2(vec2 p) { return vnoise(p) * 0.6 + vnoise(p * 2.7 + 13.1) * 0.4; }
+vec2 uvRot(vec2 uv, float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c) * uv; }
+// 三平面投影权重（按法线朝各轴的强度），带锐化避免接缝糊
+vec3 triW(vec3 wn) {
+  vec3 w = pow(abs(wn), vec3(4.0));
+  return w / max(1e-4, w.x + w.y + w.z);
+}
+vec3 triSample(sampler2D tex, vec3 wp, vec3 wn, float scale) {
+  vec3 w = triW(wn);
+  vec3 cx = texture2D(tex, wp.zy * scale).rgb;
+  vec3 cy = texture2D(tex, wp.xz * scale).rgb;
+  vec3 cz = texture2D(tex, wp.xy * scale).rgb;
+  return cx * w.x + cy * w.y + cz * w.z;
+}
+// 三平面 + 各轴 UV 旋转错位：同一块花纹不在三轴上对齐成重复网格
+vec3 triSampleR(sampler2D tex, vec3 wp, vec3 wn, float scale, float ang) {
+  vec3 w = triW(wn);
+  vec3 cx = texture2D(tex, uvRot(wp.zy, ang) * scale).rgb;
+  vec3 cy = texture2D(tex, uvRot(wp.xz, ang * 1.31 + 0.5) * scale).rgb;
+  vec3 cz = texture2D(tex, uvRot(wp.xy, ang * 2.07 + 1.1) * scale).rgb;
+  return cx * w.x + cy * w.y + cz * w.z;
+}
+vec3 rockWarp(vec3 wp) {
+  return wp; // 域扭曲已移除：漩涡根因不在它，且省 6 次 fbm 采样（软渲染关键）
+}
+// 岩石三平面终采：小角度慢旋转 + 双尺度混拼。
+// 【漩涡根因复盘】旧版 ang = fbm2 * 6.2832 让旋转角随位置转满整个 2π：
+//   覆盖完整 2π 的平滑角度场，其等角线必在噪声极值点周围闭合 → 贴图绕极值点
+//   打转，形成木纹/年轮状漩涡（实测关掉域扭曲漩涡依旧，元凶是旋转场本身）。
+// 修复：旋转角压到 ±0.45rad（≈±26°）且频率降到 0.006（特征尺度 ~160m）——
+//   朝向仍逐区域变化、足以打破全局重复网格，但局部 UV 扭曲量 <0.02rad/m，
+//   肉眼不可见，不再产生涡旋。
+vec3 rockTri(sampler2D tex, vec3 wp, vec3 wn) {
+  float ang = (fbm2(wp.xz * 0.006 + wp.y * 0.003 + 3.0) - 0.5) * 0.9;
+  float mixN = fbm2(wp.xz * 0.10 + wp.y * 0.05 + 9.4);
+  vec3 a = triSampleR(tex, wp, wn, ROCK_SCALE, ang);
+  vec3 b = triSampleR(tex, wp + 53.7, wn, ROCK_SCALE * 0.34, ang * 1.7 + 2.2);
+  return mix(a, b, smoothstep(0.30, 0.72, mixN));
+}
+// 水平沉积层理：沿世界高度的连续条带，给板岩加"一层层"的地质感
+float strata(vec3 wp) {
+  float band = sin(wp.y * 0.85 + sin(wp.x * 0.09 + wp.z * 0.07) * 1.6) * 0.5 + 0.5;
+  band += sin(wp.y * 2.3 + wp.z * 0.21) * 0.10;
+  return band;
+}
+// 原 4 路 splat（草/泥/岩/沙）：峡谷外保持原有岛屿地表
+vec3 baseAlbedo(vec2 uv) {
   vec3 a = texture2D(sD0, uv).rgb * vec3(0.84, 0.98, 0.80) * vSplat.x;
   a += texture2D(sD1, uv).rgb * vec3(0.90, 0.87, 0.78) * vSplat.y;
-  a += texture2D(sD2, uv).rgb * vec3(0.80, 0.86, 0.80) * vSplat.z;   // 岩壁压暗，避免灰白抢眼
-  a += texture2D(sD3, uv).rgb * vec3(0.88, 0.89, 0.83) * vSplat.w;   // 沙滩略压，贴合湿沙
+  a += texture2D(sD2, uv).rgb * vec3(0.80, 0.83, 0.79) * vSplat.z;
+  a += texture2D(sD3, uv).rgb * vec3(0.88, 0.89, 0.83) * vSplat.w;
   return a;
 }
-vec3 splatNormal(vec2 uv) {
+vec3 baseNormal(vec2 uv) {
   vec3 n = texture2D(sN0, uv).xyz * vSplat.x;
   n += texture2D(sN1, uv).xyz * vSplat.y;
   n += texture2D(sN2, uv).xyz * vSplat.z;
   n += texture2D(sN3, uv).xyz * vSplat.w;
   return n;
 }
-float splatRough(vec2 uv) {
+float baseRough(vec2 uv) {
   float r = texture2D(sR0, uv).g * vSplat.x;
   r += texture2D(sR1, uv).g * vSplat.y;
   r += texture2D(sR2, uv).g * vSplat.z;
   r += texture2D(sR3, uv).g * vSplat.w;
   return r;
+}
+// 深褐湿岩：直接取山体同一张 rock 贴图，三平面投影 + 层理/湿痕，颜色天然一致。
+// 反"程序化贴图"三件套：双尺度混采 + 各轴 UV 旋转错位 + 大尺度苔痕/水渍色斑。
+vec3 wetRock(vec3 wp, vec3 wn) {
+  // rockTri：小角度慢旋转 + 双尺度，远山近崖都不再显重复
+  vec3 rock = rockTri(sD2, wp, wn);
+  rock *= vec3(0.86, 0.88, 0.85);                          // 轻压亮度；aerial_rocks 自带灰岩+苔斑色调
+  // 大尺度色斑：苔痕/干燥面已在贴图内，这里只做 10~30m 的宏观明暗不均匀
+  float blotch = fbm2(wp.xz * 0.055 + wp.y * 0.02 + 19.0);
+  rock *= 0.84 + smoothstep(0.15, 0.75, blotch) * 0.30;
+  // 水平沉积层理只应出现在近垂直崖壁：相位以海拔 y 为主，在缓坡上其等值线
+  // 会退化成"海拔等高线环"（俯视时一圈圈像地形图，极假）——按朝向竖直度门控。
+  float st = strata(wp);
+  float seam = smoothstep(0.84, 0.98, st);
+  float vert = smoothstep(0.45, 0.80, 1.0 - abs(wn.y));    // 崖壁才开层理
+  rock *= mix(1.0, 0.90 + st * 0.16 - seam * 0.08, vert);
+  float wet = sin(wp.x * 0.18 + wp.z * 0.13) * sin(wp.z * 0.27) * 0.5 + 0.5;
+  rock *= 0.90 + wet * 0.10;                              // 湿痕斑驳
+  rock *= clamp(0.78 + wp.y * 0.016, 0.68, 1.10);         // 高位亮、谷底暗
+  float steep = 1.0 - abs(wn.y);
+  rock *= mix(1.05, 0.96, smoothstep(0.10, 0.42, steep)); // 陡壁略暗、缓坡略亮
+  return rock;
+}
+vec3 splatAlbedo(vec2 uv, vec3 wp, vec3 wn) {
+  vec3 base = baseAlbedo(uv);
+  float steep = 1.0 - abs(wn.y);
+  // 峡谷区域整体统一湿岩；其余全岛陡壁（山峰/海岸崖）按坡度渐变换湿岩，消除平面 UV 竖纹
+  float w = rockW(wp, steep);
+  if (w <= 0.001) return base;
+  return mix(base, wetRock(wp, wn), w);
+}
+vec3 splatNormal(vec2 uv, vec3 wp, vec3 wn) {
+  float steep = 1.0 - abs(wn.y);
+  float w = rockW(wp, steep);
+  if (w <= 0.001) return baseNormal(uv);
+  // 法线与 albedo 同一 rockTri 采样（同扭曲场同角度），凹凸不显重复网格
+  vec3 tn = rockTri(sN2, wp, wn);
+  return mix(baseNormal(uv), tn, w);
+}
+float splatRough(vec2 uv, vec3 wp, vec3 wn) {
+  float steep = 1.0 - abs(wn.y);
+  float w = rockW(wp, steep);
+  if (w <= 0.001) return baseRough(uv);
+  // 粗糙度感知频率低，平铺本就不显眼：单尺度三平面即可，省一半采样（软渲染下很关键）
+  return mix(baseRough(uv), triSampleR(sR2, wp, wn, ROCK_SCALE, 0.4).r, w);
 }
 `;
 
@@ -124,21 +250,21 @@ export function applyTerrainPBR(mesh, set) {
 
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, samplers);
-    shader.vertexShader = 'attribute vec4 splat;\nvarying vec4 vSplat;\n'
+    shader.vertexShader = 'attribute vec4 splat;\nattribute float trailrock;\nvarying vec4 vSplat;\nvarying float vTrailRock;\nvarying vec3 vRockWorldPos;\nvarying vec3 vRockWorldNrm;\n'
       + shader.vertexShader.replace(
         '#include <begin_vertex>',
-        '#include <begin_vertex>\n\tvSplat = splat;'
+        '#include <begin_vertex>\n\tvSplat = splat;\n\tvTrailRock = trailrock;\n\tvRockWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\n\tvRockWorldNrm = normalize(mat3(modelMatrix) * normal);'
       );
     let fs = FRAG_DECL + shader.fragmentShader;
     fs = fs.replace('#include <map_fragment>',
-      'diffuseColor.rgb *= splatAlbedo( vMapUv );');
+      'diffuseColor.rgb *= splatAlbedo( vMapUv, vRockWorldPos, vRockWorldNrm );');
     fs = fs.replace('#include <roughnessmap_fragment>',
-      'float roughnessFactor = clamp( 0.68 + splatRough( vMapUv ) * 0.32, 0.0, 1.0 ) * roughness;');
+      'float roughnessFactor = clamp( 0.68 + splatRough( vMapUv, vRockWorldPos, vRockWorldNrm ) * 0.32, 0.0, 1.0 ) * roughness;');
     fs = fs.split('texture2D( normalMap, vNormalMapUv ).xyz')
-      .join('splatNormal( vMapUv )');
+      .join('splatNormal( vMapUv, vRockWorldPos, vRockWorldNrm )');
     shader.fragmentShader = fs;
   };
-  m.customProgramCacheKey = () => 'terrain-splat-v1';
+  m.customProgramCacheKey = () => 'terrain-splat-v15-trailrock';
   m.needsUpdate = true;
   console.log('[pbr] 地形 4 路 splat 材质已启用');
   return true;

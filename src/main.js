@@ -84,8 +84,11 @@ async function boot() {
   // 真实 PBR 贴图：缺文件时 loadPBR 返回 null，地形/植被自动回退程序化版本
   const qs = new URLSearchParams(location.search);
   const noPBR = qs.has('nopbr');                 // QA/调试：全部回退程序化材质
-  const pbr = noPBR ? { ground: null, foliage: {} } : await loadPBR();
-  if (!qs.has('nofoliage')) for (const [k, t] of Object.entries(pbr.foliage)) setTextureOverride(k, t);
+  const pbr = noPBR ? { ground: null, foliage: {}, bole: null } : await loadPBR();
+  if (!qs.has('nofoliage')) {
+    for (const [k, t] of Object.entries(pbr.foliage)) setTextureOverride(k, t);
+    if (pbr.bole) { setTextureOverride('bole', pbr.bole.diff); setTextureOverride('boleN', pbr.bole.nrm); }
+  }
   pbrState.foliage = Object.keys(pbr.foliage);
   await step('正在生成岛屿地形', 12);
   env.sample();
@@ -106,7 +109,7 @@ async function boot() {
   console.log('[assets] 已加载:', artInfo.loaded.join(', ') || '(无)', '| 缺失:', artInfo.missing.join(', ') || '(无)');
   await step('正在种植雨林植被', 42);
   buildFlora(scene, 1);
-  await step('正在架设索桥与洞穴', 66);
+  await step('正在架设索桥与栈道', 66);
   buildStructures(scene);
   particles = makeParticles(scene);
   await step('正在放归林间野生动物', 80);
@@ -184,7 +187,9 @@ const game = {
     if (state !== 'playing' || !player) return;
     const s = this.sens * 0.0021;
     player.yaw -= dx * s;
-    player.pitch = clamp(player.pitch - dy * s, -1.45, 1.45);
+    // 俯仰上限 ±1.15rad(≈66°)：再大会让视线逼近 up 轴，cam.lookAt 发生万向锁、
+    // 相机 roll 翻转（画面侧倒），玩家在峡谷抬头时感觉「视角卡住回不来」。
+    player.pitch = clamp(player.pitch - dy * s, -1.15, 1.15);
   },
   applyQuality(q) {
     renderer.setPixelRatio(q === 0 ? Math.min(devicePixelRatio, 1) : q === 1 ? Math.min(devicePixelRatio, 1.5) : Math.min(devicePixelRatio, 2));
@@ -265,12 +270,19 @@ addEventListener('keydown', e => {
     if (panel && !panel.hidden) { panel.hidden = true; return; }
   }
   player.keys[e.code] = true;
+  // 背包 B 是切换键：打开、关闭都按 B。必须在 state 检查之前处理——
+  // 背包打开时 state='paused'，落在下面的提前 return 里就再也关不掉了。
+  if (e.code === 'KeyB') {
+    const bag = document.getElementById('bag-panel');
+    if (bag && !bag.hidden) game.closeBag();
+    else if (state === 'playing') { sfx.uiclick(); game.openBag(); }
+    return;
+  }
   if (state !== 'playing') {
     if (e.code === 'Escape' && state === 'paused') game.resume();
     return;
   }
-  // 背包 / 补给快捷键（1/2/3 已被武器占用，用 4/5）
-  if (e.code === 'KeyB') { sfx.uiclick(); game.openBag(); return; }
+  // 补给快捷键（1/2/3 已被武器占用，用 4/5）
   if (e.code === 'Digit4') { player.useBagItem('medkit'); return; }
   if (e.code === 'Digit5') { player.useBagItem('ammo'); return; }
   if (e.code === 'KeyQ') {
@@ -374,7 +386,7 @@ function loop() {
       const wd = waterDistance(player.pos.x, player.pos.z);
       let lv = Math.exp(-wd.dist / 7.0);                                        // 0m→1 / 7m→0.37 / 15m→0.12 / 28m→0.02
       if (wd.depth > 0.03) lv = Math.max(lv, 0.86 + Math.min(0.14, wd.depth * 0.22));
-      if (zone.cave) lv *= 0.12;                                               // 洞里几乎传不进来
+      if (zone.cave) lv *= 0.60;                                               // 暗区预留（现恒 false）
       setWaterNear(lv < 0.02 ? 0 : lv);
     }
     // BGM 战斗切换：有任一活兽处于 aggro 即视为遭遇战；脱离后延迟 5s 回探索层
@@ -383,8 +395,8 @@ function loop() {
       if (fighting) lastCombatT = playTime;
       setCombat(fighting || (playTime - lastCombatT) < 5);
     }
-    // 洞穴压暗
-    caveBlend += ((zone.cave ? 1 : 0) - caveBlend) * dt * 3;
+    // 穿山峡谷改为露天通道：不再压暗（保留 caveBlend 变量供 env.update 接口使用，恒为 0）
+    caveBlend = 0;
     if (ui.updateAlmanac) ui.updateAlmanac(env);
     // 胜利演出
     if (player.win) {

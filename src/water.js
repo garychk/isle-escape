@@ -15,8 +15,10 @@ const shared = {
   uSunDir: { value: new THREE.Vector3(0.4, 0.8, 0.4) },
   uSunCol: { value: new THREE.Color(0xfff2d8) },
   uSunPower: { value: 1 },
-  uWind: { value: 0.25 },        // 0 微风 ~ 1.2 风暴；由 env.rain/weather 每帧同步
-  uWaveEnable: { value: 1 },     // ?nowaves=1 整体关闭主浪
+    uFogCol: { value: new THREE.Color(0xa8b6a4) },  // 远海融入雾色用，每帧从 env.scene.fog.color 同步
+    uWind: { value: 0.25 },        // 0 微风 ~ 1.2 风暴；由 env.rain/weather 每帧同步
+    uWaveEnable: { value: 1 },     // ?nowaves=1 整体关闭主浪
+    uKillInland: { value: new THREE.Vector2(0, 0) },
 };
 const mats = [];
 let loaded = false;
@@ -67,6 +69,8 @@ export function setWaterTime(t) {
   shared.uSunDir.value.copy(e.sunDir.y < -0.02 ? e.moonDir : e.sunDir);
   shared.uSunCol.value.copy(e.sun.color);
   shared.uSunPower.value = Math.min(1, Math.max(0, e.sun.intensity / 3.0));
+  // 远海融合色跟随全局雾色（env.update 每帧已把 fog 色写入 scene.fog.color）
+  if (e.scene && e.scene.fog) shared.uFogCol.value.copy(e.scene.fog.color);
 }
 
 /** ?nowaves=1：关掉顶点主浪，保留法线波纹，便于前后对比 */
@@ -151,7 +155,8 @@ uniform float uSunPower, uSunGloss, uSunStrength;
 uniform float uWaveFoam;
 uniform sampler2D uWaterTex, uDepth;
 uniform vec2 uCenter, uSize;
-uniform vec3 uDeep, uShallow, uSunDir, uSunCol;
+uniform vec3 uDeep, uShallow, uSunDir, uSunCol, uFogCol;
+uniform vec2 uKillInland;   // 内陆遮罩半径 [r0,r1]：r<r0 整片隐掉；(0,0)=不启用
 varying vec2 vWorldXZ;
 varying vec2 vWaveSlope;
 varying float vWaveCrest;
@@ -221,6 +226,18 @@ const FRAG_BODY = `
   // 越过盆地的矩形悬空部分整片透明，陆地上不再浮水
   diffuseColor.a = clamp(uOpacity * mix(0.35, 1.0, d)
     + fres * 0.28 * (0.35 + 0.65 * d), 0.0, 1.0) * basin;
+  // 内陆防漏（仅海面启用）：海面矩形覆盖全球，凡内陆地形低于海平面的地方
+  // （断魂谷河床、丘陵随机洼地）都会被灌进蓝色海水，与旁边水塘的淡水判若两物。
+  // 这里按离岛中心的半径把内陆整片隐掉——内陆水一律由独立淡水 plane 承载。
+  // 阈值依据：内陆地形最低点 r≈235（再低也是谷底河床，走淡水河 plane），
+  // 海岸水线最小 r≈264，[238,248] 两侧都留足余量，海岸外观零变化。
+  float ir = distance(vWorldXZ, vec2(0.0));
+  diffuseColor.a *= mix(1.0, smoothstep(uKillInland.x, uKillInland.y, ir), step(0.5, uKillInland.y));
+  // 远海融入地平线雾：随距离把水色压向雾色（与天空霾带、scene.fog 同源），
+  // 海面矩形边缘处已 ≈100% 雾色 → 与天空霾带无缝衔接，看不出世界边际。
+  // 水塘/沼泽尺寸 <200m，smoothstep 在其上恒为 0，不受影响。
+  float hd = distance(vWorldXZ, cameraPosition.xz);
+  diffuseColor.rgb = mix(diffuseColor.rgb, uFogCol, smoothstep(240.0, 540.0, hd) * 0.9);
 `;
 
 /**
@@ -253,6 +270,8 @@ export function createWaterMaterial(o) {
     uWaveFoam: { value: o.waveFoam ?? 0.55 },
     uWind: shared.uWind,
     uWaveEnable: shared.uWaveEnable,
+    uKillInland: { value: new THREE.Vector2(
+      o.killInland ? o.killInland[0] : 0, o.killInland ? o.killInland[1] : 0) },
   };
   const m = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -270,9 +289,57 @@ export function createWaterMaterial(o) {
       '#include <normal_fragment_maps>',
       '#include <normal_fragment_maps>\n' + FRAG_BODY);
   };
-  m.customProgramCacheKey = () => 'isle-water-v2';
+  m.customProgramCacheKey = () => 'isle-water-v4';
   m.userData.waterU = U;
   m.needsUpdate = true;
   mats.push(m);
+  return m;
+}
+
+// ---------------------------------------------------------------------------
+// 跌水材质（2026-11-19）：两片水位不同的水域交界处，贴地形铺"往下流"的白水飘带。
+// uv.y 沿流向增长（单位 = 2.2m），噪声沿 +uv.y 方向滚动 = 水往低处流。
+// 走 MeshStandardMaterial 注入：白拿雾/光照/昼夜/阴影兼容；shared.uTime 统一驱动。
+// ---------------------------------------------------------------------------
+const CAS_VERT = 'varying vec2 vCuv;\n';
+const CAS_FRAG = `
+varying vec2 vCuv;
+uniform float uTime;
+float casHash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float casNoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(casHash(i), casHash(i + vec2(1.0, 0.0)), f.x),
+             mix(casHash(i + vec2(0.0, 1.0)), casHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+`;
+
+export function createCascadeMaterial() {
+  const m = new THREE.MeshStandardMaterial({
+    // 2026-11-19 用户：白布条太假、颜色和水对不上——
+    // 透明度降到 0.68、粗糙度提高消高光，基色贴水体浅水色，白水只在流纹处出现
+    color: 0xffffff, transparent: true, opacity: 0.68,
+    roughness: 0.72, metalness: 0, depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = shared.uTime;
+    shader.vertexShader = CAS_VERT + shader.vertexShader.replace(
+      '#include <begin_vertex>', '#include <begin_vertex>\n\tvCuv = uv;');
+    shader.fragmentShader = CAS_FRAG + shader.fragmentShader.replace(
+      '#include <map_fragment>',
+      `#include <map_fragment>
+      {
+        float flow = vCuv.y * 2.2 - uTime * 1.5;             // 沿流向滚动（+y = 下坡方向）
+        float n1 = casNoise(vec2(vCuv.x * 6.0, flow));        // 顺流拉长的水纹
+        float n2 = casNoise(vec2(vCuv.x * 13.0 + 4.7, flow * 1.9 + 2.0));
+        float streak = smoothstep(0.38, 0.80, n1 * 0.62 + n2 * 0.38);
+        float edge = smoothstep(0.0, 0.24, vCuv.x) * smoothstep(1.0, 0.76, vCuv.x);
+        // 基色 = 浅水绿（与水潭/河道 shallow 同系），白水只叠在流纹上且不过曝
+        diffuseColor.rgb = mix(vec3(0.30, 0.38, 0.35), vec3(0.78, 0.84, 0.81), 0.22 + streak * 0.68);
+        diffuseColor.a *= edge * smoothstep(0.0, 0.18, vCuv.y);   // 顶端渐隐融入岸线
+      }`);
+  };
+  m.customProgramCacheKey = () => 'isle-cascade-v2';
+  m.needsUpdate = true;
   return m;
 }

@@ -324,7 +324,7 @@ function makeDino() {
 }
 
 function makeZombie() {
-  // 外部 zombie.glb 优先（洞窟僵尸：兜帽平民+狼牙棒，含 idle/walk/swipe 三段骨骼动画）
+  // 外部 zombie.glb 优先（峡谷僵尸：兜帽平民+狼牙棒，含 idle/walk/swipe 三段骨骼动画）
   // 头朝 +Z = 野兽前进方向（face:1）；缺文件时程序化简版僵尸兜底
   const zi = instance('zombie');
   if (zi) {
@@ -492,9 +492,15 @@ export class BeastManager {
       // —— 死亡处理 ——
       if (b.state === 'dead') {
         b.deadT += dt;
+        // 阶段1（0~0.45s）：倒地
         const t = Math.min(1, b.deadT * 2.2);
         b.group.rotation.z = t * Math.PI * 0.42;
-        b.group.position.y = b.y - t * 0.15;
+        // 阶段2（4~5.5s）：尸体自动消失——先沉入地面再隐藏，避免凭空消失穿帮
+        if (b.deadT > 4) {
+          const sink = Math.min(1, (b.deadT - 4) / 1.5);
+          b.group.position.y = b.y - t * 0.15 - sink * 2.4;
+          if (sink >= 1) b.group.visible = false;
+        }
         continue;
       }
       const spec = b.spec;

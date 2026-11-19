@@ -1,5 +1,5 @@
 // 任务系统：把原本静态的"任务目标"HUD 变成有阶段、有反馈的主线推进。
-// 三个阶段：抵达木屋补给 → 清剿洞穴僵尸 → 登船逃生。
+// 三个阶段：抵达木屋补给 → 清剿山道僵尸 → 登船逃生。
 // 只通过 UI.toast / UI.setObjective 与现有系统交互，不改玩家/战斗逻辑。
 import { CABIN, BOAT } from './config.js';
 
@@ -10,9 +10,9 @@ const STAGES = [
     hint: '木屋在营地西北方向，罗盘有标记',
   },
   {
-    title: '清剿山腹洞穴',
-    desc: '穿过索桥，消灭洞窟中的<span style="color:var(--amber)">僵尸</span>',
-    hint: '洞穴沿小径向北，枪声会引来更多野兽',
+    title: '清剿翻山垭口',
+    desc: '翻过垭口，消灭山道上的<span style="color:var(--amber)">僵尸</span>',
+    hint: '山道沿小径翻过垭口，枪声会引来更多野兽',
   },
   {
     title: '登上渔船离岛',
@@ -45,7 +45,7 @@ export class Quests {
   apply() {
     const s = STAGES[Math.min(this.stage, STAGES.length - 1)];
     let desc = s.desc;
-    if (this.stage === 1) desc = `穿过索桥，消灭洞窟僵尸 <b>${Math.min(this.caveKills(), this.killTarget)}/${this.killTarget}</b>`;
+    if (this.stage === 1) desc = `翻过垭口，消灭山道僵尸 <b>${Math.min(this.caveKills(), this.killTarget)}/${this.killTarget}</b>`;
     this.ui.setObjective(s.title, desc);
   }
 
@@ -61,19 +61,19 @@ export class Quests {
       if (d < 12) {
         this.stage = 1;
         this.caveKills0 = this.beasts ? this.beasts.kills : 0;
-        this.ui.toast('已抵达木屋 · 新目标：清剿山腹洞穴');
+        this.ui.toast('已抵达木屋 · 新目标：清剿翻山垭口');
         this.apply();
       }
       return;
     }
 
-    // 阶段 2：击杀洞穴僵尸达标
+    // 阶段 2：击杀山道僵尸达标
     if (this.stage === 1) {
       const k = this.caveKills();
       if (k !== this._lastKills) { this._lastKills = k; this.apply(); }
       if (k >= this.killTarget) {
         this.stage = 2;
-        this.ui.toast('洞穴已肃清 · 最后目标：登船离岛');
+        this.ui.toast('山道已肃清 · 最后目标：登船离岛');
         this.apply();
       }
     }

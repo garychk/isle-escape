@@ -88,7 +88,7 @@ export const sfx = {
   },
 };
 
-// —— 环境音（风/鸟/虫/洞窟低鸣），按所在区域切换 ——
+// —— 环境音（风/鸟/虫/峡谷低鸣），按所在区域切换 ——
 export function startAmbient() {
   const c = ensure(); if (!c || ambNodes) return;
   const out = c.createGain(); out.gain.value = 0.5; out.connect(master);
@@ -102,29 +102,21 @@ export function startAmbient() {
   lfo.connect(lg).connect(wg.gain);
   wind.connect(wf).connect(wg).connect(out);
   wind.start(); lfo.start();
-  // 虫鸣（夏季细颤）
-  const ins = c.createOscillator(); ins.type = 'sine'; ins.frequency.value = 4200;
-  const ig = c.createGain(); ig.gain.value = 0.0;
-  const ilfo = c.createOscillator(); ilfo.frequency.value = 7.3;
-  const ilg = c.createGain(); ilg.gain.value = 0.008;
-  ilfo.connect(ilg).connect(ig.gain);
-  ins.connect(ig).connect(out);
-  ins.start(); ilfo.start();
+  // 虫鸣原为 4200Hz 合成正弦脉冲，听感像电子"滴滴"声——已移除
   // 鸟鸣不再在这里随机点放：交由下方「野生动物音景」统一调度，
-  // 带真实声源坐标、左右声像、距离衰减，并跟随昼夜 / 雨天 / 海岸 / 洞穴变化。
-  // 洞窟低鸣（进入洞穴时启用）
+  // 带真实声源坐标、左右声像、距离衰减，并跟随昼夜 / 雨天 / 海岸 / 峡谷变化。
+  // 峡谷低鸣（进入峡谷深处时启用）
   const cave = c.createOscillator(); cave.type = 'sine'; cave.frequency.value = 55;
   const cg = c.createGain(); cg.gain.value = 0;
   cave.connect(cg).connect(out);
   cave.start();
-  nodes.caveGain = cg; nodes.insectGain = ig; nodes.windGain = wg;
+  nodes.caveGain = cg; nodes.windGain = wg;
   ambNodes = nodes;
 }
 export function setCaveAmbience(inCave) {
   if (!ambNodes) return;
   const t = ctx.currentTime;
   ambNodes.caveGain.gain.linearRampToValueAtTime(inCave ? 0.14 : 0, t + 1.2);
-  ambNodes.insectGain.gain.value = inCave ? 0 : ambNodes.insectGain.gain.value;
 }
 
 // —— 水流环境音：assets/sfx_water_flow.mp3 ——
@@ -272,6 +264,10 @@ export function startBGM() {
   loadSfxFile('sfx_engine_idle.ogg', 'engineIdle');
   loadSfxFile('sfx_growl.ogg', 'growl');
   loadSfxFile('sfx_water_flow.mp3', 'waterFlow');   // 水流环境音（循环，见 setWaterNear）
+  // 鸟叫真声（2026-11-19 用户）：主鸟鸣换成夜莺森林鸣唱；孔雀/布谷鸟作低频特叫
+  loadSfxFile('sfx_nightingale.mp3', 'nightingale');
+  loadSfxFile('sfx_peacock.mp3', 'peacock');
+  loadSfxFile('sfx_cuckoo.mp3', 'cuckoo');
   const out = c.createGain(); out.gain.value = 0; out.connect(master);
   out.gain.linearRampToValueAtTime(0.55, c.currentTime + 3.0);
   const gExp = c.createGain(); gExp.gain.value = 1; gExp.connect(out);
@@ -517,7 +513,7 @@ export function engineState() {
 
 // ================= 野生动物音景 =================
 // 与 wildlife.js 的可见动物联动：每声都从画面里真实的鸟 / 远处地面点取声源坐标，
-// 按「玩家位置 + 相机右向量」算声像与距离衰减，再按昼夜 / 雨天 / 海岸 / 洞穴挑物种。
+// 按「玩家位置 + 相机右向量」算声像与距离衰减，再按昼夜 / 雨天 / 海岸 / 峡谷挑物种。
 // 全部 WebAudio 现场合成；远处兽吼复用已加载的 sfx_growl.ogg（低通 + 降速），
 // 因此不引入任何新资源请求，缺文件时也有完整合成兜底。
 const wildCtx = {
@@ -528,10 +524,10 @@ const wildStat = { calls: 0, birds: 0, roars: 0, last: '', lastDist: 0 };
 let wildTimer = null, wildGetPoint = null;
 const wc = (v, a, b) => v < a ? a : v > b ? b : v;
 
-/** 主循环定期同步：昼夜、雨量、洞穴、离海程度、玩家坐标与相机右向量 */
+/** 主循环定期同步：昼夜、雨量、峡谷、离海程度、玩家坐标与相机右向量 */
 export function setWildlifeContext(c) { Object.assign(wildCtx, c); }
 
-/** getPoint(kind): 'bird' | 'roar' | 'hiss' → {x,y,z}，由 wildlife.js 提供真实动物坐标 */
+/** getPoint(kind): 'bird' | 'roar' → {x,y,z}，由 wildlife.js 提供真实动物坐标 */
 export function startWildlifeAudio(getPoint) {
   const c = ensure(); if (!c || wildTimer) return;
   wildGetPoint = getPoint || null;
@@ -587,6 +583,26 @@ function wBuf(key, dst, gain, rate, cutoff) {
   src.connect(f).connect(g).connect(dst); src.start();
   return true;
 }
+// 真声鸟鸣播放：随机起点截取一段 + 首尾淡入淡出 + 微变调——
+// 录音整段循环会像复读机，截段每次不同起点，听感是林中随时冒出的一声。
+function wBufClip(key, dst, gain, clipMin = 3.5, clipMax = 6.5, rateMin = 0.94, rateMax = 1.06) {
+  const c = ensure(); const buf = sfxBuffers.get(key);
+  if (!c || !buf || !enabled) return false;
+  const clip = Math.min(buf.duration, Math.min(clipMax, Math.max(clipMin, clipMin + Math.random() * (clipMax - clipMin))));
+  const off = Math.random() * Math.max(0, buf.duration - clip * 0.6);  // 偏移不超过尾部留白
+  const src = c.createBufferSource(); src.buffer = buf;
+  src.playbackRate.value = rateMin + Math.random() * (rateMax - rateMin);
+  const t = c.currentTime;
+  const g = c.createGain();
+  const fin = Math.min(0.3, clip * 0.15), fout = Math.min(0.4, clip * 0.2);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), t + fin);
+  g.gain.setValueAtTime(gain, t + clip - fout);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + clip);
+  src.connect(g).connect(dst);
+  src.start(t, off, clip + 0.05);
+  return true;
+}
 
 // 各物种叫声明细：都是短促的调频音 + 共振峰噪声，参数每次随机，不会听成复读机
 function wCall(kind, dst, gain) {
@@ -639,17 +655,8 @@ function wCall(kind, dst, gain) {
       wTone(dst, 'sine', f * 0.96, f * 0.82, 0.34, G * 0.11, 0.42, 0.04);
       break;
     }
-    case 'hiss': {           // 爬行类：草叶间的嘶声
-      wNoise(dst, 0.55, 'highpass', 2600, 0.8, G * 0.050);
-      wNoise(dst, 0.35, 'bandpass', 4200, 1.4, G * 0.028, 0.10);
-      break;
-    }
-    case 'roar': {           // 远处兽吼：真吼叫文件低通降速 + 低频层 + 山谷回声
+    case 'roar': {           // 远处兽吼：真吼叫文件低通降速（纯录音，无合成层）
       wBuf('growl', dst, G * 0.60, 0.58 + Math.random() * 0.16, 420);
-      wTone(dst, 'sawtooth', 78, 42, 1.25, G * 0.095, 0, 0.09);
-      wTone(dst, 'sine', 55, 38, 1.50, G * 0.075, 0.06, 0.10);
-      wNoise(dst, 1.00, 'lowpass', 260, 0.7, G * 0.050, 0.05);
-      wTone(dst, 'sawtooth', 62, 40, 0.90, G * 0.030, 0.75, 0.08);  // 回声
       break;
     }
     default: {
@@ -665,7 +672,7 @@ function pickBird(day, rain) {
     ['chirp', 32 * day * damp], ['trill', 22 * day * damp], ['whistle', 12 * day * damp],
     ['caw', 8 * day * damp], ['raptor', 3 * day * damp],
     ['gull', (5 + 26 * shore) * day * damp],
-    ['hoot', 20 * night], ['hiss', 5 + 5 * night],
+    ['hoot', 20 * night],
   ];
   let sum = 0; for (const t of T) sum += t[1];
   let r = Math.random() * sum;
@@ -674,21 +681,40 @@ function pickBird(day, rain) {
 }
 
 function emitWild(kind, forced = false) {
+  // 孔雀 / 布谷鸟特叫：真声文件 + 远处随机声源，缺文件回退乌鸦合成音
+  if (kind === 'peacock' || kind === 'cuckoo') {
+    const pos = {
+      x: wildCtx.px + (Math.random() - 0.5) * 120, y: 5 + Math.random() * 12,
+      z: wildCtx.pz + (Math.random() - 0.5) * 120,
+    };
+    const s = wSpatial(pos); if (!s) return;
+    const g = kind === 'peacock' ? 0.42 : 0.62;   // 孔雀叫极尖响，压得更低
+    if (!wBufClip(kind, s.dst, s.gain * g, kind === 'cuckoo' ? 2.5 : 4, kind === 'cuckoo' ? 7 : 9)) {
+      wCall('caw', s.dst, s.gain);
+    }
+    wildStat.calls++; wildStat.birds++;
+    wildStat.last = kind; wildStat.lastDist = Math.round(s.d * 10) / 10;
+    return;
+  }
   if (!forced) {
     // 昼夜切换瞬间，延迟触发的「对唱」可能还带着旧时段的物种（夜里冒出一声海鸥很穿帮），
     // 发声前按当前环境再校正一次。debugWildlifeCall 用 forced=true 保留任意物种调试能力。
     const day = 1 - wc(wildCtx.night, 0, 1);
     if (day < 0.30 && /^(chirp|trill|whistle|caw|gull|raptor)$/.test(kind)) {
-      kind = Math.random() < 0.72 ? 'hoot' : 'hiss';
+      kind = 'hoot';
     } else if (day > 0.70 && kind === 'hoot') kind = 'trill';
   }
-  const src = wildGetPoint && wildGetPoint(kind === 'roar' ? 'roar' : (kind === 'hiss' ? 'hiss' : 'bird'));
+  const src = wildGetPoint && wildGetPoint(kind === 'roar' ? 'roar' : 'bird');
   const pos = src || {
     x: wildCtx.px + (Math.random() - 0.5) * 50, y: 6 + Math.random() * 14,
     z: wildCtx.pz + (Math.random() - 0.5) * 50,
   };
   const s = wSpatial(pos); if (!s) return;
-  wCall(kind, s.dst, s.gain);
+  // 主鸟鸣（含夜间 hoot）统一用夜莺真声录音，随机截段；文件缺失回退原合成
+  const isBird = kind !== 'roar';
+  if (!(isBird && wBufClip('nightingale', s.dst, s.gain * 0.5, 3.5, 6.5))) {
+    wCall(kind, s.dst, s.gain);
+  }
   wildStat.calls++;
   if (kind === 'roar') wildStat.roars++; else wildStat.birds++;
   wildStat.last = kind; wildStat.lastDist = Math.round(s.d * 10) / 10;
@@ -699,11 +725,11 @@ function wildTick() {
   const day = 1 - wc(wildCtx.night, 0, 1);
   const rain = wc(wildCtx.rain, 0, 1);
   const cave = wildCtx.cave;
-  // 洞穴隔绝外界：几乎只剩偶尔一声极闷的远吼
-  const roarP = cave ? 0.006 : (0.012 + (1 - day) * 0.022 + rain * 0.012);
+  // 峡谷仍属露天：鸟鸣变稀、远吼略带回响，不再完全隔绝
+  const roarP = cave ? 0.010 : (0.012 + (1 - day) * 0.022 + rain * 0.012);
   let kind = null;
   if (Math.random() < roarP) kind = 'roar';
-  else if (!cave && Math.random() < 0.66 * (0.32 + day * 0.78) * (1 - rain * 0.72)) {
+  else if (Math.random() < (cave ? 0.30 : 0.66) * (0.32 + day * 0.78) * (1 - rain * 0.72)) {
     kind = pickBird(day, rain);
   }
   if (!kind) return;
@@ -714,7 +740,18 @@ function wildTick() {
       if (ctx && ctx.state === 'running') emitWild(Math.random() < 0.5 ? kind : pickBird(day, rain));
     }, 220 + Math.random() * 380);
   }
+  // —— 孔雀 / 布谷鸟特叫（2026-11-19 用户）：低频穿插，两种交替、强制间隔 ——
+  // 每 tick(0.85s) 概率 ~1.4% → 平均约 1 分钟一次；夜间/雨天更稀。
+  // 触发后冷却 12~20s：孔雀叫完歇一阵才轮到布谷鸟，两种互不挤在一起。
+  if (spCool > 0) spCool--;
+  else if (!cave && Math.random() < 0.014 * (0.25 + day * 0.75) * (1 - rain * 0.6)) {
+    const type = spLast === 'peacock' ? 'cuckoo' : 'peacock';
+    spLast = type;
+    spCool = 14 + ((Math.random() * 9) | 0);   // ≈12~20s 冷却
+    emitWild(type);
+  }
 }
+let spLast = null, spCool = 0;   // 特叫状态：上次类型 + 剩余冷却 tick 数
 
 /** QA / 调试：绕过自动调度强制发一声，验证合成与空间化链路 */
 export function debugWildlifeCall(kind = 'chirp') {
@@ -732,5 +769,9 @@ export function wildlifeAudioState() {
       listening: !!wildCtx.listening,
     },
     growlFile: sfxBuffers.has('growl'),
+    nightingale: sfxBuffers.has('nightingale'),
+    peacock: sfxBuffers.has('peacock'),
+    cuckoo: sfxBuffers.has('cuckoo'),
+    spLast, spCool,
   };
 }

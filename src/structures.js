@@ -1,8 +1,8 @@
-// 结构物：索桥 / 沼泽木板路 / 山洞穹顶 / 救生筏 / 遇难残骸 / 林中木屋
+// 结构物：索桥 / 沼泽木板路 / 救生筏 / 遇难残骸 / 林中木屋
 import * as THREE from 'three';
 import { CFG, RAFT, BOAT, CABIN, SWAMP } from './config.js';
-import { mulberry32 } from './util.js';
-import { baseHeight, surfaceRects, surfaceRamps } from './terrain.js';
+import { mulberry32, fbm, smoothstep } from './util.js';
+import { baseHeight, terrainY, surfaceRects, surfaceRamps } from './terrain.js';
 import { colliders } from './flora.js';
 import { barkTex, rockTex, woodGrain } from './textures.js';
 import { instance } from './assets.js';
@@ -11,7 +11,9 @@ const rng = mulberry32(777);
 const woodMat = new THREE.MeshStandardMaterial({ color: 0x8b7355, roughness: 0.94 });
 const woodDark = new THREE.MeshStandardMaterial({ color: 0x5e4a30, roughness: 0.97 });
 const ropeMat = new THREE.MeshStandardMaterial({ color: 0xa8946c, roughness: 1 });
-const rockMat = new THREE.MeshStandardMaterial({ map: rockTex(), color: 0x8d8577, roughness: 1, flatShading: true });
+// rockTex 贴图本身偏暗（均值 ~0.42 sRGB），color 再乘一层后会双重压暗；
+// 这里取亮一档的暖灰，巨石/篝火石圈才不会黑成炭球（2026-11-19 桥塔巨石验收结论）
+const rockMat = new THREE.MeshStandardMaterial({ map: rockTex(), color: 0xd6ccb8, roughness: 1, flatShading: true });
 
 export const bridgeState = { swayY: 0, rotZ: 0, t: 0 };
 export let bridgePlanks = null;
@@ -23,7 +25,6 @@ export function buildStructures(scene) {
   scene.add(g);
   buildBridge(g);
   buildBoardwalk(g);
-  buildCave(g);
   buildRaft(g);
   buildWreck(g);
   buildCabin(g);
@@ -255,85 +256,79 @@ function buildCabin(g) {
   pGlass.position.copy(porchL.position); g.add(pGlass);
 }
 
-// ================= 索桥 =================
+// ================= 索桥（2026-11-19 用户：不要栏杆、去掉两头的木棍、木板老旧破损） =================
 function buildBridge(g) {
   const yD = CFG.BRIDGE_Y;
   const zA = 21.25, zB = -36.25, span = zA - zB;
-  const sag = 1.4;
+  const UP = new THREE.Object3D();
 
-  // 桥塔
-  for (const [z, dir] of [[zA + 1.2, -1], [zB - 1.2, 1]]) {
-    const ty = baseHeight(0, z);
-    const tower = new THREE.Group();
-    const pier = new THREE.Mesh(new THREE.BoxGeometry(5.2, 3.2, 3.4), rockMat);
-    pier.position.set(0, ty + 0.6, 0); pier.castShadow = true; pier.receiveShadow = true;
-    tower.add(pier);
-    for (const px of [-1.85, 1.85]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.34, 5.2, 0.34), woodDark);
-      post.position.set(px, ty + 3.4, 0); tower.add(post);
-      colliders.push({ x: px, z, r: 0.5 });
-      const brace = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.6, 0.2), woodDark);
-      brace.position.set(px, ty + 3.4, 0); brace.rotation.x = 0.5; brace.position.z = 0.7;
-      tower.add(brace);
-    }
-    const beam = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.3, 0.4), woodDark);
-    beam.position.set(0, ty + 5.8, 0); tower.add(beam);
-    tower.position.z = z;
-    g.add(tower);
-  }
+  // 桥头巨石随旧桥塔一并删除（2026-11-19 用户：悬空巨石太假）——
+  // 塔没了之后锚石失去依附对象，贴着谷缘摆就像浮在半空。
 
-  // 桥面木板（动态摆动）
+  // 桥面木板（动态摆动）——老旧破损：
+  //   风化木纹贴图 + 每板随机灰化/深褐潮渍 + 12% 整板缺失（破洞）
+  //   + 22% 半截断板（断口错边） + 18% 松脱板（下垂/歪斜）
   bridgePlanks = new THREE.Group();
   const plankGeo = new THREE.BoxGeometry(2.9, 0.1, 0.4);
-  const nPlanks = Math.floor(span / 0.52);
-  for (let i = 0; i < nPlanks; i++) {
-    const z = zA - (i + 0.5) * (span / nPlanks);
-    const p = new THREE.Mesh(plankGeo, i % 5 === 0 ? woodDark : woodMat);
-    p.position.set((rng() - 0.5) * 0.1, yD - Math.sin((i / nPlanks) * Math.PI) * 0.18, z);
-    p.rotation.x = (rng() - 0.5) * 0.03;
-    p.castShadow = true; p.receiveShadow = true;
-    bridgePlanks.add(p);
+  const wg = woodGrain();
+  const plankMat = new THREE.MeshStandardMaterial({ map: wg, color: 0xffffff, roughness: 1 });
+  const nMax = Math.floor(span / 0.52);
+  const items = [];
+  for (let i = 0; i < nMax; i++) {
+    if (rng() < 0.12) continue;                  // 整块缺失 → 桥面破洞
+    const z = zA - (i + 0.5) * (span / nMax);
+    const broken = rng() < 0.22;                 // 半截断板
+    const sagged = rng() < 0.18;                 // 松脱板
+    const sx = broken ? 0.42 + rng() * 0.14 : 0.94 + rng() * 0.1;
+    // 断板贴一侧桥缘，断口朝中间（像从中间踩断后翻掉一半）
+    const xo = broken
+      ? (rng() < 0.5 ? -1 : 1) * (1.45 - (2.9 * sx) / 2) + (rng() - 0.5) * 0.08
+      : (rng() - 0.5) * 0.1;
+    const yo = sagged
+      ? -0.08 - rng() * 0.3
+      : -Math.sin((i / nMax) * Math.PI) * 0.18;
+    items.push({
+      z, sx, xo, yo,
+      rz: sagged ? (rng() - 0.5) * 0.17 : (rng() - 0.5) * 0.03,
+      rx: sagged ? (rng() - 0.5) * 0.12 : (rng() - 0.5) * 0.03,
+      ry: (rng() - 0.5) * 0.03,
+      dz: 0.82 + rng() * 0.3,
+    });
+  }
+  const planks = new THREE.InstancedMesh(plankGeo, plankMat, items.length);
+  const c = new THREE.Color();
+  items.forEach((it, i) => {
+    UP.position.set(it.xo, yD + it.yo, it.z);
+    UP.scale.set(it.sx, 1, it.dz);
+    UP.rotation.set(it.rx, it.ry, it.rz);
+    UP.updateMatrix();
+    planks.setMatrixAt(i, UP.matrix);
+    // 风化色：褪灰白的老木板 ↔ 深褐潮渍/霉斑
+    c.setHSL(0.06 + rng() * 0.06, 0.08 + rng() * 0.22, 0.30 + rng() * 0.22);
+    planks.setColorAt(i, c);
+  });
+  if (planks.instanceColor) planks.instanceColor.needsUpdate = true;
+  planks.castShadow = true; planks.receiveShadow = true;
+  bridgePlanks.add(planks);
+
+  // 两条纵向主绳：贴桥面两缘（旧索桥绑板的真绳），随桥面一起摆动。
+  // 无塔无栏杆——绳子低伏在板缘，读作"绑木板的旧绳"而不是扶手。
+  const ropeOld = new THREE.MeshStandardMaterial({ color: 0x7d7159, roughness: 1 });
+  for (const side of [-1, 1]) {
+    const pts = [];
+    for (let i = 0; i <= 26; i++) {
+      const t = i / 26;
+      pts.push(new THREE.Vector3(side * 1.42, yD + 0.1 - Math.sin(t * Math.PI) * 0.18, zA - t * span));
+    }
+    const rope = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 42, 0.045, 5), ropeOld);
+    rope.castShadow = true;
+    bridgePlanks.add(rope);
   }
   g.add(bridgePlanks);
 
-  // 端头踏桥板（衔接地面）
-  for (const [z, y] of [[zA + 2.4, yD - 0.35], [zB - 2.4, yD - 0.35]]) {
-    const ramp = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.12, 3.4), woodMat);
-    ramp.position.set(0, baseHeight(0, z) + 0.15, z);
-    ramp.rotation.x = (z > 0 ? 1 : -1) * 0.11;
-    g.add(ramp);
-  }
-
-  // 主缆 / 扶手 / 吊索
-  const cablePts = (side, hgt, sagK) => {
-    const pts = [];
-    for (let i = 0; i <= 22; i++) {
-      const t = i / 22;
-      pts.push(new THREE.Vector3(side * 1.55, yD + hgt - Math.sin(t * Math.PI) * sag * sagK, zA - t * span));
-    }
-    return new THREE.CatmullRomCurve3(pts);
-  };
-  for (const side of [-1, 1]) {
-    const main = new THREE.Mesh(new THREE.TubeGeometry(cablePts(side, 2.1, 1), 36, 0.055, 5), ropeMat);
-    g.add(main);
-    const rail = new THREE.Mesh(new THREE.TubeGeometry(cablePts(side, 1.05, 0.13), 36, 0.035, 5), ropeMat);
-    g.add(rail);
-    for (let i = 1; i < 22; i += 2) {
-      const t = i / 22;
-      const top = cablePts(side, 2.1, 1).getPoint(t);
-      const y = top.y;
-      const h = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, y - (yD - 0.1), 4), ropeMat);
-      h.position.set(side * 1.55, (y + yD) / 2, top.z);
-      g.add(h);
-    }
-    // 系地缆
-    for (const z of [zA + 3.4, zB - 3.4]) {
-      const anchor = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 5.5, 5), ropeMat);
-      anchor.position.set(side * 2.4, baseHeight(0, z) + 1.2, z);
-      anchor.rotation.z = side * 0.85; anchor.rotation.x = (z > 0 ? -0.4 : 0.4);
-      g.add(anchor);
-    }
-  }
+  // 端头踏桥板已删除（2026-11-19 用户反馈）：纯色木板 Box 架在起伏地形上会翘边
+  // 悬空，看上去就像桥头铺了块人工平板。行走面走 groundHeight 的桥面覆盖
+  // （|x|<3.25 && z -35..20 → BRIDGE_Y），与这块踏板无关，桥头 0.4m 台阶玩家可直接迈上。
 }
 
 // ================= 沼泽木板路 =================
@@ -360,106 +355,6 @@ function buildBoardwalk(g) {
   }
 }
 
-// ================= 山洞（开凿山体 + 岩石穹顶） =================
-function buildCave(g) {
-  const caveY = CFG.CAVE_Y;
-  const wallMat = new THREE.MeshStandardMaterial({ map: rockTex(), color: 0x6b6459, roughness: 1, flatShading: true });
-  const UP = new THREE.Object3D();
-
-  // 穹顶岩块（覆盖走廊上方，形成隧道）
-  const ceilGeo = new THREE.DodecahedronGeometry(1, 0);
-  const ceil = new THREE.InstancedMesh(ceilGeo, wallMat, 190);
-  let ci = 0;
-  for (let z = -60; z > -220; z -= 3.25) {
-    for (const x of [-8.125, -2.75, 2.75, 8.125]) {
-      if (ci >= 190) break;
-      UP.position.set(x + (rng() - 0.5) * 1.8, caveY + 8.4 + rng() * 1.6, z + (rng() - 0.5) * 1.2);
-      UP.scale.set(3.4 + rng() * 2.4, 1.8 + rng() * 1.4, 3.2 + rng() * 2.6);
-      UP.rotation.set(rng() * 3, rng() * 3, rng() * 3);
-      UP.updateMatrix();
-      ceil.setMatrixAt(ci++, UP.matrix);
-    }
-  }
-  ceil.count = ci;
-  ceil.castShadow = true; ceil.receiveShadow = true;
-  g.add(ceil);
-
-  // 两侧岩壁凸起
-  const wall = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), wallMat, 120);
-  let wi = 0;
-  for (let z = -62.5; z > -217.5 && wi < 120; z -= 2.75) {
-    for (const side of [-1, 1]) {
-      if (rng() < 0.25) continue;
-      const s = 1.6 + rng() * 2.4;
-      UP.position.set(side * (7.75 + rng() * 1.0), caveY + 0.6 + rng() * 3.2, z + rng());
-      UP.scale.set(s, s * 0.95, s * 1.4);
-      UP.rotation.set(rng() * 3, rng() * 3, rng() * 3);
-      UP.updateMatrix();
-      wall.setMatrixAt(wi++, UP.matrix);
-    }
-  }
-  wall.count = wi;
-  wall.castShadow = true; wall.receiveShadow = true;
-  g.add(wall);
-
-  // 石笋 + 钟乳石
-  const stalag = new THREE.InstancedMesh(new THREE.ConeGeometry(0.5, 2.4, 7), wallMat, 46);
-  let si = 0;
-  for (let z = -67.5; z > -215 && si < 46; z -= 3.75) {
-    if (rng() < 0.35) continue;
-    UP.position.set((rng() - 0.5) * 10, caveY + 1.1, z);
-    UP.scale.set(0.7 + rng() * 1.5, 0.7 + rng() * 1.9, 0.7 + rng() * 1.5);
-    UP.rotation.set(Math.PI, rng() * 6.28, 0);
-    UP.updateMatrix();
-    stalag.setMatrixAt(si++, UP.matrix);
-  }
-  stalag.count = si;
-  g.add(stalag);
-
-  const stalact = new THREE.InstancedMesh(new THREE.ConeGeometry(0.4, 3.2, 6), wallMat, 34);
-  let ti = 0;
-  for (let z = -70; z > -212.5 && ti < 34; z -= 4) {
-    if (rng() < 0.3) continue;
-    UP.position.set((rng() - 0.5) * 10, caveY + 7.6, z);
-    UP.scale.set(0.6 + rng() * 1.2, 0.8 + rng() * 1.6, 0.6 + rng() * 1.2);
-    UP.rotation.set(0, rng() * 6.28, 0);
-    UP.updateMatrix();
-    stalact.setMatrixAt(ti++, UP.matrix);
-  }
-  stalact.count = ti;
-  g.add(stalact);
-
-  // 洞口岩框
-  for (const z of [-58.125, -219.375]) {
-    const arch = new THREE.Mesh(new THREE.TorusGeometry(9.25, 2.375, 7, 14, Math.PI), wallMat);
-    arch.position.set(0, caveY + 0.3, z);
-    arch.scale.y = 1.15;
-    g.add(arch);
-  }
-
-  // 发光水晶
-  const crystalMat = new THREE.MeshStandardMaterial({ color: 0x3fbfae, emissive: 0x1d8f80, emissiveIntensity: 0.75, roughness: 0.3, flatShading: true });
-  const spots = [[-4.5, -87.5], [4.75, -120], [-4, -155], [4.25, -185], [0, -202.5]];
-  for (const [cx, cz] of spots) {
-    for (let k = 0; k < 4; k++) {
-      const c = new THREE.Mesh(new THREE.OctahedronGeometry(0.42, 0), crystalMat);
-      const s = 0.6 + rng() * 1.3;
-      c.scale.set(s * 0.45, s * 1.9, s * 0.45);
-      c.position.set(cx + (rng() - 0.5) * 1.3, caveY + s * 0.65, cz + (rng() - 0.5) * 1.3);
-      c.rotation.set((rng() - 0.5) * 0.6, rng() * 6, (rng() - 0.5) * 0.6);
-      g.add(c);
-    }
-    const light = new THREE.PointLight(0x48e2c6, 7, 15, 1.9);
-    light.position.set(cx, caveY + 2.2, cz);
-    g.add(light);
-  }
-  // 洞口微光
-  for (const z of [-44, -178]) {
-    const l = new THREE.PointLight(0xffb26a, 3.4, 12, 2);
-    l.position.set(0, caveY + 3, z);
-    g.add(l);
-  }
-}
 
 // ================= 渔船（终点，泊在北岸栈桥外侧） =================
 function buildRaft(g) {

@@ -155,7 +155,11 @@ export class TPS {
     // 瞄准时相机位置整体抬高：人物沉到画面下缘，准星（屏幕中心）远离人物头部。
     // 抬高只改"位置"，朝向仍与弹道 dir 平行（见下方 lookAt 混合），准星与子弹始终一致。
     pos.y += this.aimBlend * 0.55;
-    const gy = groundHeight(pos.x, pos.z) + 0.34;
+    // 防穿地兜底。山体/峡谷陡壁区地面可比锚点高几十米，此行若无上限会把相机
+    // 顶到坡顶 → 整屏岩壁、失去参照（即「山那边视角卡住回不来」）。
+    // 上限锁在锚点上方 0.9m：贴壁时相机保持在玩家肩高附近，地形 FrontSide
+    // 背面剔除让相机即使略埋进坡面也能看到角色与前方，不会黑屏。
+    const gy = Math.min(groundHeight(pos.x, pos.z) + 0.34, this.pivot.y + 0.9);
     if (pos.y < gy) pos.y = gy;
     // 首帧直接就位，之后平滑跟随
     if (cam.position.distanceToSquared(pos) > 25) cam.position.copy(pos);
@@ -167,19 +171,29 @@ export class TPS {
     const hipT = this.v1.copy(this.pivot).addScaledVector(dir, 12).setY(this.pivot.y + sp * 12 + 0.06);
     const aimT = this.v4.copy(pos).addScaledVector(dir, 12);
     hipT.lerp(aimT, this.aimBlend);
+    // 硬保险：视线与 up 轴夹角过小时 lookAt 会万向锁（相机 roll 翻转 → 视角看似「卡住回不来」）。
+    // pitch 已 clamp 到 ±1.15，这里再把目标点沿水平外推，仰角封顶 ≈70°，杜绝任何极端路径。
+    const look = this.v4.copy(hipT).sub(cam.position);
+    const horiz = Math.hypot(look.x, look.z);
+    const maxY = Math.max(0.6, horiz * 2.75);
+    if (look.y > maxY) hipT.y -= look.y - maxY;
+    else if (look.y < -maxY) hipT.y += -maxY - look.y;
     cam.lookAt(hipT);
     // 瞄准变焦
     const fov = this.baseFov - this.aimBlend * 15;
     if (Math.abs(cam.fov - fov) > 0.01) { cam.fov += (fov - cam.fov) * Math.min(1, dt * 8); cam.updateProjectionMatrix(); }
   }
 
-  /** 弹簧臂：从锚点往后退，遇地面/树木就收短，避免穿模 */
+  /** 弹簧臂：从锚点往后退，遇地面/陡壁/树木就收短，避免穿模或被地形顶飞 */
   _boom(pivot, dir, want) {
-    const STEP = 0.36;
+    const STEP = 0.25;
     let d = want;
     for (let s = 0.6; s <= want; s += STEP) {
       const x = pivot.x - dir.x * s, y = pivot.y - dir.y * s, z = pivot.z - dir.z * s;
-      if (y < groundHeight(x, z) + 0.30) { d = Math.max(0.85, s - STEP); break; }
+      const gh = groundHeight(x, z);
+      // 撞地面，或落点地形显著高于锚点（陡壁/陡坎）：都收短，
+      // 否则最终 pos 会被防穿地兜底抬到高处变成俯视（视角卡住）。
+      if (y < gh + 0.30 || gh > pivot.y + 0.9) { d = Math.max(0.85, s - STEP); break; }
       let blocked = false;
       for (let i = 0; i < colliders.length; i++) {
         const c = colliders[i];

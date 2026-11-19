@@ -259,11 +259,11 @@ export class UI {
     $('lowhp').classList.toggle('on', p.hp < 30 && !p.dead);
     $('stnum').textContent = Math.ceil(p.st);
     $('stbar').firstElementChild.style.width = p.st + '%';
-    // 洞内提示
+    // 穿山峡谷提示
     const zone = p.uiZone;
     if (zone && zone.cave !== this.wasCave) {
       this.wasCave = zone.cave;
-      if (zone.cave) this.toast('洞穴深处一片漆黑 · 按 F 开枪灯', true);
+      if (zone.cave) this.toast('翻山垭口 · 山风渐冷', true);
     }
   }
   updateAmmo(p) {

@@ -5,7 +5,6 @@ export const CFG = {
   POND_Y: 2.55,          // 水塘水面
   SWAMP_Y: 2.6,          // 沼泽水面
   BRIDGE_Y: 6.65,         // 索桥桥面高度
-  CAVE_Y: 7.0,           // 洞底高度
   GRAV: 22,
   EYE: 1.62,             // 眼睛高度
   // 注意：WALK 必须贴近 walk.glb 的原生步速（Mixamo Walking ≈1.97m/s），
@@ -13,7 +12,7 @@ export const CFG = {
   WALK: 2.4, RUN: 7.0, SWAMP_WALK: 2.0, CROUCH_MULT: 0.55,
   JUMP: 7.4,
   HP_MAX: 100, ST_MAX: 100,
-  ST_DRAIN: 22, ST_REGEN: 14,
+  ST_DRAIN: 11, ST_REGEN: 14,   // 冲刺体力消耗：2026-11-19 由 22 减半到 11（跑得更持久）；恢复速率不变
   SWAMP_DPS: 3.5,        // 沼泽血蛭伤害
   SWAMP_SLOW_R: 50,
   POISON_DPS: 4, POISON_TIME: 6,
@@ -31,9 +30,7 @@ export const RAFT  = { x: 6.25, z: -272.5 };
 export const BOAT  = { x: 3.625, z: -276, y: 0, scale: 0.55 }; // 渔船（泊在栈桥外，船头朝海；GLB 原点=船中水线，主甲板高 1.0）
 export const POND  = { x: -97.5, z: 77.5 };
 export const SWAMP = { x: 107.5, z: 65 };
-export const MOUNT = { x: 0, z: -150 };      // 山体（含洞穴）
-export const CAVE_IN  = { x: 0, z: -62.5 };    // 洞口（南）
-export const CAVE_OUT = { x: 0, z: -215 };   // 洞口（北）
+export const MOUNT = { x: 0, z: -150 };      // 主山（双峰+翻山垭口，穿山峡谷已移除）
 export const BRIDGE = { x: 0, z0: 17.5, z1: -32.5 }; // 索桥（跨峡谷）
 export const CABIN = { x: -42.5, z: 19.375, padY: 5.3 }; // 林中木屋（地形压平到 padY）
 export const CAMPFIRE = { x: 87.5, z: 37.5 }; // 沼泽边废弃营地篝火（靠近回血补给点）
@@ -46,8 +43,9 @@ export const TRAIL = [
   { x: 0, z: -32.5 },               // 过索桥
   { x: 0, z: -62.5 }, { x: 0, z: -125 }, { x: 0, z: -187.5 }, { x: 0, z: -215 }, // 穿洞
   { x: 3.75, z: -245 }, { x: 6.25, z: -272.5 }, // 北岸
-  // 支线：沼泽木板路
-  { x: 107.5, z: 120 }, { x: 107.5, z: 65 }, { x: 107.5, z: 17.5 },
+  // 支线：沼泽木板路（brk：与主线不相连——旧版两点直连会斜穿全图
+  // 形成一条假小径，把东山头斜着削出一条泥土带）
+  { x: 107.5, z: 120, brk: true }, { x: 107.5, z: 65 }, { x: 107.5, z: 17.5 },
 ];
 export const TRAIL_W = 5.2;
 
@@ -73,7 +71,7 @@ export const BEAST_SPAWNS = [
   ['wolf', -62.5, 162.5, 3], ['wolf', 50, 118.75, 2], ['wolf', -75, -37.5, 2],
   ['bear', -97.5, 120, 1],                       // 水塘边的棕熊
   ['dino', 37.5, 156.25, 2],                     // 密林深处的变异恐龙
-  // 山洞守卫（走廊 x∈±11, z -62.5..-215）：spawnAll 有 ±8.75 抖动，出生点取 x=0 才不会抖出洞壁
+  // 山道守卫（翻山垭口沿线 z -62.5..-215）：山道在 x=0 一带，±8.75 抖动不会滚下陡坡
   ['zombie', 0, -106, 2], ['zombie', 0, -144, 2], ['zombie', 0, -181, 2], ['zombie', 0, -210, 1],
   // 新增：地标附近的游荡兽群，奖励探索也提升威胁
   ['wolf', -80, 135, 2],    // 瞭望塔
@@ -91,7 +89,7 @@ export const BEASTS = {
   wolf:   { hp: 70,  spd: 1.50, dmg: 14, atkR: 1.9, atkCd: 1.1, hear: 70, name: '行尸' }, // wolf.glb（原林狼槽位），丧尸式蹒跚
   bear:   { hp: 260, spd: 1.75, dmg: 34, atkR: 2.6, atkCd: 1.8, hear: 60, name: '突变巨兽' }, // mutant.glb（原棕熊槽位），沉重踏步
   dino:   { hp: 120, spd: 1.75, dmg: 22, atkR: 2.2, atkCd: 1.3, hear: 65, name: '变异恐龙' }, // 双足驼背暴徒；dino.glb 含 idle/walk/swipe
-  zombie: { hp: 45,  spd: 0.80, dmg: 8,  atkR: 1.7, atkCd: 1.4, hear: 45, name: '洞窟僵尸' }, // 小怪：zombie.glb（兜帽平民），拖沓踱步、挥棒轻击
+  zombie: { hp: 45,  spd: 0.80, dmg: 8,  atkR: 1.7, atkCd: 1.4, hear: 45, name: '山道僵尸' }, // 小怪：zombie.glb（兜帽平民），拖沓踱步、挥棒轻击
 };
 
 // 区域名卡（进入区域时展示）
@@ -102,6 +100,6 @@ export const ZONES = [
   { name: '瘴气沼泽', sub: 'MIASMA SWAMP', x0: 50, z0: 12.5, x1: 168.75, z1: 125, once: true },
   { name: '回声水洼', sub: 'ECHO MARSH POOLS', x0: 52.5, z0: -222.5, x1: 168.75, z1: 72.5, once: true },
   { name: '断魂谷',   sub: 'RAVINE CROSSING', x0: -100, z0: -37.5, x1: 100, z1: 22.5, once: true },
-  { name: '山腹洞穴', sub: 'THE HOLLOW', x0: -37.5, z0: -218.75, x1: 37.5, z1: -56.25, once: true },
+  { name: '翻山垭口', sub: 'MOUNTAIN PASS', x0: -37.5, z0: -218.75, x1: 37.5, z1: -56.25, once: true },
   { name: '北岸滩头', sub: 'NORTH SHORE', x0: -75, z0: -312.5, x1: 87.5, z1: -231.25, once: true },
 ];

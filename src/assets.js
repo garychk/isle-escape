@@ -32,9 +32,11 @@ export const MANIFEST = {
   dino:      { file: 'dino.glb', height: 2.2 }, // 变异暴徒：头朝 +Z（野兽 AI 前进方向），含 idle/walk/swipe 三段骨骼动画
   wolf:      { file: 'wolf.glb', height: 1.8 }, // 行尸（替狼）：人形 Prisoner，头朝 +Z（野兽 AI 前进方向），含 idle/walk 骨骼动画
   rock:      { file: 'rock.glb' },  // 岩石：底部中心=原点（植被/海滩石头共用），等比实例化
+  hpTree:    { file: 'hp_tree.glb' }, // 高模真树（SM_HP_Tree）：底部中心=原点，自带树皮/叶片贴图，叶片 alphaMode MASK
+  palmTree:  { file: 'palm.glb' },    // 椰子树（Palm.fbx）：底部中心=原点，树皮 PBR 三贴图 + 叶片 MASK 镂空，原高 ~41m
   reef:      { file: 'reef.glb', anchor: 'origin' }, // 航拍扫描礁石小岛：原点=航拍水线，y<0 是水下礁盘，保持建模坐标不居中不缩放
   mutant:    { file: 'mutant.glb', height: 2.4 }, // 变异巨兽（替熊）：头朝 +Z，含 idle/swipe 两段骨骼动画
-  zombie:    { file: 'zombie.glb', height: 1.4 }, // 洞窟僵尸（小怪）：头朝 +Z，含 idle/walk/swipe 三段骨骼动画
+  zombie:    { file: 'zombie.glb', height: 1.4 }, // 峡谷僵尸（小怪）：头朝 +Z，含 idle/walk/swipe 三段骨骼动画
 };
 
 const cache = new Map();
@@ -106,7 +108,7 @@ export async function loadAssets(names = Object.keys(MANIFEST), onStep) {
       cache.set(name, normalize(gltf, spec));
     } catch (e) {
       missing.add(name);
-      console.warn('[assets] 未找到 ' + spec.file + '，该槽位使用内置模型');
+      console.warn('[assets] 装载失败 ' + spec.file + ': ' + (e && e.message || e) + ' —— 该槽位使用内置模型');
     } finally {
       done++;
       if (onStep) onStep(done / Math.max(1, todo.length), name);

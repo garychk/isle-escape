@@ -7,6 +7,8 @@ const cache = {};
 // 真实素材覆盖（由 pbr.js 在启动阶段注入）：缺文件时下面的函数自动回退程序化贴图
 const overrides = {};
 export function setTextureOverride(key, t) { if (t) overrides[key] = t; }
+export const hasTextureOverride = (k) => !!overrides[k];
+export const getTextureOverride = (k) => overrides[k] || null;
 
 function bleedAlpha(cv, rgb) {
   const g = cv.getContext('2d');
