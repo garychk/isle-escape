@@ -270,9 +270,9 @@ export class Env {
     this.fireflies = makeFireflies();
     scene.add(this.fireflies);
 
-    scene.fog = new THREE.FogExp2(0xa8b6a4, 0.0024);
+    scene.fog = new THREE.FogExp2(0xa8b6a4, 0);
     scene.background = new THREE.Color(0xa8b6a4);
-    this.fogDensity = 0.0024;
+    this.fogDensity = 0;
   }
 
   setTime(h) { this.t = ((h % 24) + 24) % 24; }
@@ -359,11 +359,11 @@ export class Env {
     this.rim.color.copy(this.mats.hemiS);
     this.rim.intensity = (0.18 + 0.30 * (1 - nightK)) * (1 - this.caveBlend * 0.9);
 
-    // —— 雾 ——
+    // —— 雾 ——（2026-11-20 用户要求去掉户外雾：密度只保留洞穴内部氛围项）
     const fogC = this.mats.fog;
     if (this.scene.fog) {
       this.scene.fog.color.copy(fogC);
-      this.scene.fog.density = 0.0021 + nightK * 0.0016 + ra * 0.0042 + this.cloud * 0.0008 + this.caveBlend * 0.006;
+      this.scene.fog.density = this.caveBlend * 0.006;
     }
     this.scene.background.copy(fogC);
 

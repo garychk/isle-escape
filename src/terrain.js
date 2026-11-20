@@ -48,7 +48,9 @@ export function baseHeight(x, z) {
   // 隆起一座横贯谷口的高山，把翻山垭口封成"死谷"；山北坡被沙滩混合带截断，
   // 自然形成临海陡崖。高度与主山双峰同量级（总峰 ~60m），翻不过去。
   {
-    const wallZ = smoothstep(-208, -236, z);                       // 谷底尽头往北隆起
+    // wallZ 是凸包（-208 起坡、-268~-310 回落）：曾用单向 smoothstep 导致加高项
+    // 无限向北延伸，x≈0 处出现一条贯穿北海的细长高地形（直升机俯瞰呈楔形穿帮）
+    const wallZ = smoothstep(-208, -236, z) * (1 - smoothstep(-268, -310, z));
     const wallX = 1 - smoothstep(52, 82, Math.abs(x));             // 东西两端接回山体林地
     const wf = wallZ * wallX;
     if (wf > 0) {
@@ -440,7 +442,9 @@ export function buildWaters(scene) {
       killInland: o.killInland,   // 海面内陆防漏遮罩半径（见 water.js FRAG_BODY 注释）
     });
     // 海面要足够密才能托住 27m 短浪（192 段 ≈ 5.5m/格），否则波峰被削成三角锯齿
-    const g = new THREE.PlaneGeometry(o.w, o.d, o.seg, o.seg);
+    const g = o.circular
+      ? new THREE.CircleGeometry(o.radius, o.seg)
+      : new THREE.PlaneGeometry(o.w, o.d, o.seg, o.seg);
     const mesh = new THREE.Mesh(g, m);
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.set(o.x, o.y, o.z);
@@ -453,7 +457,7 @@ export function buildWaters(scene) {
   // killInland：内陆遮罩——海面矩形盖全球，凡内陆地形低于海平面处（断魂谷河床、
   // 丘陵随机洼地）旧版都会被灌进蓝色海水；现在 r<238 整片隐掉，内陆水一律
   // 由下方的水塘/河道/沼泽等淡水 plane 承载（阈值推导见 water.js FRAG_BODY 注释）
-  mk({ w: CFG.WORLD * 1.9, d: CFG.WORLD * 1.9, x: 0, z: 0, y: CFG.SEA_Y, seg: 192,
+  mk({ circular: true, radius: 1800, w: 3600, d: 3600, x: 0, z: 0, y: CFG.SEA_Y, seg: 256,
     depthScale: 7, depthRes: 512, killInland: [238, 248],
     deep: 0x0d3440, shallow: 0x3e8c8b, opacity: 0.93, rough: 0.17, metalness: 0.16,
     nrmScale: 0.032, ripple: 0.85, wave: 1.3, foam: 0.7, waveFoam: 0.62,

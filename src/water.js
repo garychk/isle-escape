@@ -239,13 +239,18 @@ const FRAG_BODY = `
   // 让海面在距边界 30% 处开始平滑淡出、边际融进天空，任何时间/机位都看不到海面尽头。
   // 水塘/河道 uSize 小，淡出带叠加在原有 basin/水线掩码上，观感不受影响。
   vec2 ext = uSize * 0.5;
-  vec2 over2 = max(abs(vWorldXZ - uCenter) - ext * 0.70, 0.0) / (ext * 0.30);
-  diffuseColor.a *= 1.0 - clamp(max(over2.x, over2.y), 0.0, 1.0);
-  // 远海融入地平线雾：随距离把水色压向雾色（与天空霾带、scene.fog 同源），
-  // 海面矩形边缘处已 ≈100% 雾色 → 与天空霾带无缝衔接，看不出世界边际。
-  // 水塘/沼泽尺寸 <200m，smoothstep 在其上恒为 0，不受影响。
-  float hd = distance(vWorldXZ, cameraPosition.xz);
-  diffuseColor.rgb = mix(diffuseColor.rgb, uFogCol, smoothstep(240.0, 540.0, hd) * 0.9);
+  float edgeFade;
+  if (uKillInland.y > 0.5 && max(uSize.x, uSize.y) > 1000.0) {
+    float radius = ext.x;
+    float radial = distance(vWorldXZ, uCenter);
+    edgeFade = smoothstep(radius * 0.70, radius, radial);
+  } else {
+    vec2 over2 = max(abs(vWorldXZ - uCenter) - ext * 0.70, 0.0) / (ext * 0.30);
+    edgeFade = clamp(max(over2.x, over2.y), 0.0, 1.0);
+  }
+  diffuseColor.a *= 1.0 - edgeFade;
+  // 2026-11-20 去掉户外雾后，远海不再压向雾色——远处直接看到真实海面，
+  // 只靠上面的矩形边缘 alpha 淡出衔接天空。
 `;
 
 /**
@@ -297,7 +302,7 @@ export function createWaterMaterial(o) {
       '#include <normal_fragment_maps>',
       '#include <normal_fragment_maps>\n' + FRAG_BODY);
   };
-  m.customProgramCacheKey = () => 'isle-water-v4';
+  m.customProgramCacheKey = () => 'isle-water-v5';
   m.userData.waterU = U;
   m.needsUpdate = true;
   mats.push(m);

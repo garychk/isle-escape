@@ -46,7 +46,22 @@ def center_of(o):
 
 rot = bpy.data.objects['Rot']
 c_rot = center_of(rot)
-refit(rot, Vector((c_rot.x, c_rot.y, body_top + 0.08)))   # 只改垂直高度，水平保持原设计
+# 目标水平位置 = 座舱后的白色舱罩小盒（用户红箭头指定）：细扫描锁定凸起在
+# y≈1.95~2.45（顶面 1.87），不能用宽窗口——尾鳍（z 2.93）会污染质心
+Y0, Y1 = 1.95, 2.45
+win = [p for p in (nody.matrix_world @ v.co for v in nody.data.vertices) if Y0 <= p.y <= Y1]
+win_top = max(p.z for p in win)
+top_pts = [p for p in win if p.z > win_top - 0.35]
+hx = sum(p.x for p in top_pts) / len(top_pts)
+hy = sum(p.y for p in top_pts) / len(top_pts)
+rot_min = min((rot.matrix_world @ v.co).z for v in rot.data.vertices)
+rot_h = max((rot.matrix_world @ v.co).z for v in rot.data.vertices) - rot_min
+# 桅杆下端埋进舱罩顶 0.18m
+target_z = win_top - 0.18 + rot_h / 2
+print('body top Z =', round(body_top, 3), '| cowling top =', round(win_top, 3),
+      '| centroid =', round(hx, 3), round(hy, 3), '(', len(top_pts), 'verts )',
+      '| rotor h =', round(rot_h, 3), '| target Z =', round(target_z, 3))
+refit(rot, Vector((hx, hy, target_z)))   # 水平对准舱罩，垂直压进舱罩顶
 
 rot2 = bpy.data.objects['Rot2']
 refit(rot2, center_of(rot2))                               # 原地重定枢轴

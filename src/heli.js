@@ -43,36 +43,28 @@ export class Heli {
     this.pitchS = 0; this.rollS = 0;   // 平滑后的姿态角
     this.spooled = false;
 
-    // 停机坪：深色圆盘 + 黄圈 + H 字（不随机身旋转/升降）
-    const pad = new THREE.Group();
-    const disc = new THREE.Mesh(new THREE.CylinderGeometry(6.2, 6.2, 0.1, 36),
-      new THREE.MeshStandardMaterial({ color: 0x2e3236, roughness: 0.95 }));
-    disc.position.y = 0.05; disc.receiveShadow = true;
-    pad.add(disc);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(5.2, 0.22, 8, 48),
-      new THREE.MeshStandardMaterial({ color: 0xd8b23a, roughness: 0.8 }));
-    ring.rotation.x = Math.PI / 2; ring.position.y = 0.12;
-    pad.add(ring);
-    // H 字：两竖一横
-    const hMat = new THREE.MeshStandardMaterial({ color: 0xd8b23a, roughness: 0.8 });
-    for (const [w, d, dx, dz] of [[0.5, 3.6, -1.5, 0], [0.5, 3.6, 1.5, 0], [2.5, 0.5, 0, 0]]) {
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, d), hMat);
-      bar.position.set(dx, 0.16, dz);
-      pad.add(bar);
-    }
-    pad.position.set(x, this.pos.y, z);
-    scene.add(pad);
-    this.pad = pad;
-
     this.group = new THREE.Group();
     const inst = instance('heli');
     this.hasModel = !!inst;
     this.mainRotor = null; this.tailRotor = null;
     if (inst) {
+      let rotorNode = null;
       inst.wrap.traverse((o) => {
-        if (o.name === 'Rot') this.mainRotor = o;
+        if (o.name === 'Rot') rotorNode = o;
         else if (o.name === 'Rot2') this.tailRotor = o;
       });
+      if (rotorNode?.parent) {
+        const rotorPivot = new THREE.Group();
+        rotorPivot.name = 'MainRotorPivot';
+        // Keep the blade mesh in place while putting its pivot at the white mast cap.
+        // GLB values are in the HeliRoot frame; the cap is centered at y=2.32.
+        const cap = new THREE.Vector3(0, 2.32, -1.48);
+        rotorPivot.position.copy(cap);
+        rotorNode.position.sub(cap);
+        rotorNode.parent.add(rotorPivot);
+        rotorPivot.add(rotorNode);
+        this.mainRotor = rotorPivot;
+      }
     }
     this.group.add(inst ? inst.wrap : proxy());
     this.group.position.copy(this.pos);
@@ -177,7 +169,6 @@ export class Heli {
     this.rollS += (rollT - this.rollS) * Math.min(1, dt * 4);
     this.group.position.set(this.pos.x, this.pos.y, this.pos.z);
     this.group.rotation.set(this.pitchS, this.yaw, this.rollS, 'YXZ');
-    if (this.pad) this.pad.visible = !this.flying || alt < 40;   // 升高后停机坪淡出由远处小尺寸自然完成，这里只防 z-fight
 
     // —— 旋翼自转 ——
     if (this.mainRotor) this.mainRotor.rotation.y = this.rotT;
