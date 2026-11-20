@@ -38,7 +38,8 @@ export const MANIFEST = {
   mutant:    { file: 'mutant.glb', height: 2.4 }, // 变异巨兽（替熊）：头朝 +Z，含 idle/swipe 两段骨骼动画
   zombie:    { file: 'zombie.glb', height: 1.4 }, // 峡谷僵尸（小怪）：头朝 +Z，含 idle/walk/swipe 三段骨骼动画
   bholenath: { file: 'bholenath.glb', height: 9.5, yaw: 180 }, // 凹谷神像（坐姿湿婆，100 万面减到 9 万，源高 2.09m 放大到 9.5m；模型原生面朝 -Z，转 180 面朝谷口/南）
-  heli:      { file: 'heli.glb', length: 9.2, anchor: 'origin' }, // 直升机（MD-500 型，61 万面减到 9.8 万）：机头朝 +Z（与 jeep 同约定），HeliRoot 已置于全机底部中心，Rot=主旋翼/Rot2=尾旋翼由 heli.js 逐帧自转
+  heli:      { file: 'heli.glb', v: 9, length: 9.2, anchor: 'origin' }, // 直升机（MD-500 型，61 万面减到 9.8 万）：机头朝 +Z（与 jeep 同约定），HeliRoot 已置于全机底部中心，Rot=主旋翼/Rot2=尾旋翼由 heli.js 逐帧自转；v=9 机身迷彩涂装（MilitaryGreen→4 色丛林迷彩 Voronoi 斑块）+ 座舱玻璃透明（BLEND alpha0.32，材质改名 HeliGlass 由 heli.js 运行时关 depthWrite/单面渲染）；v=8 主旋翼整体向机尾挪 0.07m，且节点原点精确重定位到转轴环圆心（Kasa 圆拟合，三环互验 ±1.3mm）——枢轴零漂移由构造保证；v=7 的质心补正法留有 ~1.3cm 残余（桨毂细节不对称）
+  bird:      { file: 'bird.glb', v: 2, anchor: 'origin' }, // 飞鸟（bird.fbx 烘焙版）：黑身黄喙、头朝 +Z（v=2 修正倒飞）、翼展 0.85m、自带顶点色；拍翅由 wildlife.js 的 aWing 顶点动画驱动（无骨骼，保持 InstancedMesh 单 drawcall）
 };
 
 const cache = new Map();
@@ -51,7 +52,10 @@ function urlFor(name, spec) {
   const inline = globalThis.__ASSET_DATA__;
   if (inline && inline[name]) return inline[name];
   const base = (typeof document !== 'undefined' && document.baseURI) || 'http://localhost/';
-  return new URL('assets/' + spec.file, base).href;
+  // spec.v：模型改版号——GLB 属大文件，旧标签页/激进缓存会拿着旧模型不放，
+  // 改完模型 bump 一下 v 强制所有客户端重新拉取（heli 已踩过两次这个坑）
+  const q = spec.v ? '?v=' + spec.v : '';
+  return new URL('assets/' + spec.file + q, base).href;
 }
 
 function normalize(gltf, spec) {

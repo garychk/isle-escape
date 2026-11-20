@@ -48,23 +48,23 @@ export class Heli {
     this.hasModel = !!inst;
     this.mainRotor = null; this.tailRotor = null;
     if (inst) {
-      let rotorNode = null;
+      // 主/尾旋翼直接自转：glTF 里 Rot/Rot2 的网格已以自身原点（桨毂中心）为几何中心
+      // （Blender fix_heli_rotor.py 烘焙过），所以 rotation.y / rotation.x 就是绕枢轴转。
+      // 注意：早期这里包过一层硬编码的 rotorPivot 组，坐标对不上旋翼原点 → 转起来会绕错点公转，已删除。
       inst.wrap.traverse((o) => {
-        if (o.name === 'Rot') rotorNode = o;
+        if (o.name === 'Rot') this.mainRotor = o;
         else if (o.name === 'Rot2') this.tailRotor = o;
+        // 座舱玻璃（paint_heli_camo.py 里 BLEND+alpha0.32）：双面壳前后都会画，透明排序会发黑，
+        // 关 depthWrite + 只渲正面更干净；顺带提亮反光
+        if (o.isMesh && o.material && o.material.name === 'HeliGlass') {
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          for (const m of mats) {
+            m.depthWrite = false;
+            m.side = THREE.FrontSide;
+            m.envMapIntensity = 1.6;
+          }
+        }
       });
-      if (rotorNode?.parent) {
-        const rotorPivot = new THREE.Group();
-        rotorPivot.name = 'MainRotorPivot';
-        // Keep the blade mesh in place while putting its pivot at the white mast cap.
-        // GLB values are in the HeliRoot frame; the cap is centered at y=2.32.
-        const cap = new THREE.Vector3(0, 2.32, -1.48);
-        rotorPivot.position.copy(cap);
-        rotorNode.position.sub(cap);
-        rotorNode.parent.add(rotorPivot);
-        rotorPivot.add(rotorNode);
-        this.mainRotor = rotorPivot;
-      }
     }
     this.group.add(inst ? inst.wrap : proxy());
     this.group.position.copy(this.pos);

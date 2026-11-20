@@ -13,6 +13,7 @@ import { mulberry32, clamp, dist2 } from './util.js';
 import { baseHeight, zoneState } from './terrain.js';
 import { colliders } from './flora.js';
 import { scaleNormal } from './textures.js';
+import { has as hasAsset, instance as assetInstance } from './assets.js';
 
 const rng = mulberry32(20261118);
 const V3 = new THREE.Vector3();
@@ -104,16 +105,17 @@ function combine(parts) {
 // 时间 uniform 由所有材质共享：材质即便被重新编译（envMap 更新等），动画也不会断
 const TIME_U = { value: 0 };
 function wildlifeMaterial(o = {}) {
+  const birdVC = !!o.birdVC;   // GLB 飞鸟：顶点色黑身黄喙，无鳞片法线/自发光底色
   const m = new THREE.MeshStandardMaterial({
     // 鸟统一黑模剪影：不要顶点色/皮纹/自发光底色，天空背景下就是干净的黑鸟轮廓
-    vertexColors: !o.black,
-    color: o.black ? 0x0b0b0b : 0xffffff,
+    vertexColors: !o.black || birdVC,
+    color: (o.black && !birdVC) ? 0x0b0b0b : 0xffffff,
     roughness: o.black ? 1.0 : 0.84,
     metalness: o.black ? 0 : 0.02,
-    normalMap: o.black ? null : SCALE_N,
+    normalMap: (o.black || birdVC) ? null : SCALE_N,
     normalScale: new THREE.Vector2(0.30, 0.30),
     // 树荫/背光下留一点自发光底色，避免整只动物糊成一条纯黑剪影（鸟不需要）
-    emissive: new THREE.Color(o.black ? 0x000000 : 0x11180c), emissiveIntensity: o.black ? 0 : 0.42,
+    emissive: new THREE.Color((o.black || birdVC) ? 0x000000 : 0x11180c), emissiveIntensity: (o.black || birdVC) ? 0 : 0.42,
     side: THREE.DoubleSide,
   });
   const flapA = o.flap ?? 0, waveA = o.wave ?? 0, flapSpeed = o.flapSpeed ?? 9;
@@ -143,7 +145,7 @@ function wildlifeMaterial(o = {}) {
       transformed.x += sin(aSeg * 8.0 - wph * 5.0) * aSeg * uWWave;
     `);
   };
-  m.customProgramCacheKey = () => 'wildlife-v1-' + flapA + '-' + waveA + '-' + flapSpeed + (o.black ? '-black' : '');
+  m.customProgramCacheKey = () => 'wildlife-v2-' + flapA + '-' + waveA + '-' + flapSpeed + (o.black ? '-black' : '') + (birdVC ? '-birdvc' : '');
   return m;
 }
 
@@ -427,10 +429,36 @@ export function buildWildlife(scene) {
     meshes.push(mesh);
   }
 
-  // —— 鸟类：群鸟 / 猛禽 / 海鸟 / 停栖鸟共用一个几何与黑模材质 ——
+  // —— 鸟类：群鸟 / 猛禽 / 海鸟 / 停栖鸟共用一个几何与材质 ——
+  // 优先用 bird.glb（bird.fbx 烘焙帧：黑身黄喙顶点色，头朝 +Z、翼展 0.85m）；
+  // 缺文件时回退内置程序化鸟，两种都走同一套 aWing 顶点拍翅 + InstancedMesh。
   const BN = 88;
-  const bgeo = combine(makeBirdParts());
-  const bmat = wildlifeMaterial({ flap: 0.095, flapSpeed: 12.0, wave: 0, black: true });
+  let bgeo = null, birdVC = false;
+  const birdAsset = hasAsset('bird') ? assetInstance('bird') : null;
+  if (birdAsset) {
+    birdAsset.wrap.traverse((o) => { if (o.isMesh && !bgeo) bgeo = o.geometry.clone(); });
+    if (bgeo && bgeo.attributes.color) {
+      // GLB 翼展沿 X：按离中轴距离补 aWing（翼尖=1，身体=0），aSeg 置 0（不参与蛇形摆动）
+      const pa = bgeo.attributes.position;
+      bgeo.computeBoundingBox();
+      const bb = bgeo.boundingBox;
+      const cx = (bb.min.x + bb.max.x) / 2;
+      const hx = Math.max(0.001, (bb.max.x - bb.min.x) / 2);
+      const wing = new Float32Array(pa.count);
+      for (let i = 0; i < pa.count; i++) {
+        wing[i] = clamp((Math.abs(pa.getX(i) - cx) / hx - 0.18) / 0.82, 0, 1);
+      }
+      bgeo.setAttribute('aWing', new THREE.BufferAttribute(wing, 1));
+      bgeo.setAttribute('aSeg', new THREE.BufferAttribute(new Float32Array(pa.count), 1));
+      birdVC = true;
+      console.log('[wildlife] 飞鸟已换成 bird.glb（顶点色模型，翼展 ' + (hx * 2).toFixed(2) + 'm）');
+    } else bgeo = null;
+  }
+  if (!bgeo) {
+    bgeo = combine(makeBirdParts());
+    console.log('[wildlife] bird.glb 不可用，飞鸟回退内置程序化模型');
+  }
+  const bmat = wildlifeMaterial({ flap: 0.095, flapSpeed: 12.0, wave: 0, black: !birdVC, birdVC });
   const bmesh = new THREE.InstancedMesh(bgeo, bmat, BN);
   bmesh.name = 'wildlife:birds';
   bmesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);

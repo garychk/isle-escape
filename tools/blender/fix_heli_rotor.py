@@ -1,40 +1,92 @@
-# 修复 heli.glb 旋翼枢轴偏移：
-#   FBX 原始数据的旋翼网格顶点中心偏离物体枢轴（主旋翼水平偏 ~1.6m、尾旋翼偏 ~5.4m），
-#   游戏里绕枢轴自转时叶片会"绕圈飞"。这里把网格中心重新对到枢轴：
-#   - Rot（主旋翼）：网格中心保持水平位置不动，垂直抬到机身 bbox 顶 + 0.08，枢轴 = 网格中心
-#   - Rot2（尾旋翼）：枢轴直接移到网格中心（原地不动，只是把旋转中心放对）
-# 公式：要保持世界顶点 = 原顶点 + (target - 中心)，且新枢轴 = target，
-#   顶点平移量 d = R⁻¹ @ (原 location - 中心)（R 为物体旋转，本模型恒为 identity）。
-import bpy, os
+# 修复 heli.glb 旋翼枢轴偏移（v8 确定性版本）：
+#   v7 的"bbox 对中 + 桨毂质心补正"链路留下 ~1.3cm 轴偏差（枢轴仍有可见打转），
+#   且网格稀疏（573 顶点）导致迭代质心法振荡不收敛（已踩坑，勿再尝试）。
+#   v8 改为几何测量法，一次到位：
+#   1) 全 mesh 按 z 分层做 Kasa 最小二乘圆拟合，找出转轴的多个圆环截面
+#      （桅杆底环/桨毂环/顶环，圆心一致性 <2mm 互为验证），取平均 → 机械转轴 A；
+#   2) 整块旋翼网格沿机尾方向平移 0.07m（用户指定：往机头反方向挪 0.07m）；
+#   3) 世界顶点不动，把节点原点重定位到平移后的轴心 A' —— 旋转轴 = 机械轴，
+#      枢轴零漂移由构造保证。
+#   Rot2（尾旋翼）沿用 bbox 对中（原地重定枢轴）。
+import bpy, os, math
 from mathutils import Vector, Matrix
+import numpy as np
 
 GLB = os.path.abspath('assets/heli.glb')
+TAIL_SHIFT = 0.07   # 机尾方向（+Y，机头为 -Y：尾旋翼 Rot2 在 +Y 侧）平移量
+
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=GLB)
 
 nody = bpy.data.objects['Nody']
-body_top = max((nody.matrix_world @ v.co).z for v in nody.data.vertices)
-print('body top Z =', round(body_top, 3))
+rot = bpy.data.objects['Rot']
+rot2 = bpy.data.objects['Rot2']
 
-def refit(o, target):
-    M = o.matrix_world.copy()
-    loc = M.to_translation()
-    mn = Vector((1e9,) * 3); mx = Vector((-1e9,) * 3)
-    for v in o.data.vertices:
-        w = M @ v.co
-        for i in range(3):
-            mn[i] = min(mn[i], w[i]); mx[i] = max(mx[i], w[i])
-    c = (mn + mx) / 2
-    d_local = M.to_3x3().inverted() @ (loc - c)
-    o.data.transform(Matrix.Translation(d_local))
-    # target 是世界坐标；o.location 是父级局部坐标，必须经父矩阵逆变换，否则整体偏移 HeliRoot 的 T
-    par_inv = o.parent.matrix_world.inverted() if o.parent else Matrix.Identity(4)
-    o.location = par_inv @ target
-    o.rotation_euler = (0.0, 0.0, 0.0)
-    o.scale = (1.0, 1.0, 1.0)
-    print(o.name, 'center', [round(v, 3) for v in c], '-> target', [round(v, 3) for v in target],
-          'd_world', [round(v, 3) for v in (loc - c)])
+def kasa(pts):
+    n = len(pts)
+    sx = sum(p.x for p in pts); sy = sum(p.y for p in pts)
+    sxx = sum(p.x * p.x for p in pts); syy = sum(p.y * p.y for p in pts)
+    sxy = sum(p.x * p.y for p in pts)
+    sxz = sum(p.x * (p.x * p.x + p.y * p.y) for p in pts)
+    syz = sum(p.y * (p.x * p.x + p.y * p.y) for p in pts)
+    sz = sum(p.x * p.x + p.y * p.y for p in pts)
+    A = np.array([[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, n]], float)
+    b = np.array([sxz, syz, sz], float)
+    a, bb, c = np.linalg.solve(A, b)
+    cx, cy = a / 2, bb / 2
+    R = math.sqrt(max(c + a * a / 4 + bb * bb / 4, 1e-12))
+    res = max(math.hypot(p.x - cx, p.y - cy) - R for p in pts)
+    angs = sorted(math.atan2(p.y - cy, p.x - cx) % (2 * math.pi) for p in pts)
+    gap = max(angs[i + 1] - angs[i] for i in range(len(angs) - 1))
+    gap = max(gap, angs[0] + 2 * math.pi - angs[-1])
+    return cx, cy, R, res, gap
 
+# —— 1) 找机械转轴 ——
+Mw = rot.matrix_world
+ws = [Mw @ v.co for v in rot.data.vertices]
+bands = []
+for w in sorted(ws, key=lambda p: p.z):
+    for bd in bands:
+        if abs(bd['z'] - w.z) < 0.04:
+            bd['pts'].append(w); bd['z'] = sum(p.z for p in bd['pts']) / len(bd['pts'])
+            break
+    else:
+        bands.append({'z': w.z, 'pts': [w]})
+cands = []
+for bd in bands:
+    if len(bd['pts']) < 10:
+        continue
+    try:
+        cx, cy, R, res, gap = kasa(bd['pts'])
+    except Exception:
+        continue
+    if 0.02 < R < 0.3 and res < 0.05 and gap < math.radians(60):
+        print('ring z=%.2f n=%3d center=(%.4f,%.4f) R=%.4f res=%.4f' % (bd['z'], len(bd['pts']), cx, cy, R, res))
+        cands.append(Vector((cx, cy, 0)))
+assert len(cands) >= 2, 'need >=2 ring sections to vote'
+med = Vector((sorted(c.x for c in cands)[len(cands) // 2],
+              sorted(c.y for c in cands)[len(cands) // 2], 0))
+near = [c for c in cands if (c - med).length < 0.005]
+A = Vector((sum(c.x for c in near) / len(near), sum(c.y for c in near) / len(near), 0))
+print('mechanical axis A = (%.4f, %.4f) from %d rings' % (A.x, A.y, len(near)))
+
+# —— 2) 整块平移 0.07m 机尾方向 ——
+rot.data.transform(Matrix.Translation((0.0, TAIL_SHIFT, 0)))
+bpy.context.view_layer.update()
+Mw = rot.matrix_world
+loc = Mw.to_translation()
+Ap = Vector((A.x, A.y + TAIL_SHIFT, loc.z))   # 新轴心（z 保持原高度）
+
+# —— 3) 节点原点重定位到 A'（世界顶点保持不动：网格先做反向补偿）——
+rot.data.transform(Matrix.Translation(Mw.to_3x3().inverted() @ (loc - Ap)))  # 补偿原点位移
+par_inv = rot.parent.matrix_world.inverted() if rot.parent else Matrix.Identity(4)
+rot.location = par_inv @ Ap
+rot.rotation_euler = (0.0, 0.0, 0.0)
+rot.scale = (1.0, 1.0, 1.0)
+bpy.context.view_layer.update()
+print('rotor origin ->', [round(v, 4) for v in rot.matrix_world.to_translation()])
+
+# —— Rot2 原地重定枢轴（bbox 对中，v7 已做过，此处幂等）——
 def center_of(o):
     M = o.matrix_world
     mn = Vector((1e9,) * 3); mx = Vector((-1e9,) * 3)
@@ -44,27 +96,14 @@ def center_of(o):
             mn[i] = min(mn[i], w[i]); mx[i] = max(mx[i], w[i])
     return (mn + mx) / 2
 
-rot = bpy.data.objects['Rot']
-c_rot = center_of(rot)
-# 目标水平位置 = 座舱后的白色舱罩小盒（用户红箭头指定）：细扫描锁定凸起在
-# y≈1.95~2.45（顶面 1.87），不能用宽窗口——尾鳍（z 2.93）会污染质心
-Y0, Y1 = 1.95, 2.45
-win = [p for p in (nody.matrix_world @ v.co for v in nody.data.vertices) if Y0 <= p.y <= Y1]
-win_top = max(p.z for p in win)
-top_pts = [p for p in win if p.z > win_top - 0.35]
-hx = sum(p.x for p in top_pts) / len(top_pts)
-hy = sum(p.y for p in top_pts) / len(top_pts)
-rot_min = min((rot.matrix_world @ v.co).z for v in rot.data.vertices)
-rot_h = max((rot.matrix_world @ v.co).z for v in rot.data.vertices) - rot_min
-# 桅杆下端埋进舱罩顶 0.18m
-target_z = win_top - 0.18 + rot_h / 2
-print('body top Z =', round(body_top, 3), '| cowling top =', round(win_top, 3),
-      '| centroid =', round(hx, 3), round(hy, 3), '(', len(top_pts), 'verts )',
-      '| rotor h =', round(rot_h, 3), '| target Z =', round(target_z, 3))
-refit(rot, Vector((hx, hy, target_z)))   # 水平对准舱罩，垂直压进舱罩顶
-
-rot2 = bpy.data.objects['Rot2']
-refit(rot2, center_of(rot2))                               # 原地重定枢轴
+c2 = center_of(rot2)
+M2 = rot2.matrix_world
+rot2.data.transform(Matrix.Translation(M2.to_3x3().inverted() @ (M2.to_translation() - c2)))
+par2 = rot2.parent.matrix_world.inverted() if rot2.parent else Matrix.Identity(4)
+rot2.location = par2 @ c2
+rot2.rotation_euler = (0.0, 0.0, 0.0)
+rot2.scale = (1.0, 1.0, 1.0)
+bpy.context.view_layer.update()
 
 for o in (nody, rot, rot2):
     if o.animation_data:
