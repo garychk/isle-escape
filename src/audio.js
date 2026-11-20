@@ -264,6 +264,7 @@ export function startBGM() {
   loadSfxFile('sfx_engine_idle.ogg', 'engineIdle');
   loadSfxFile('sfx_growl.ogg', 'growl');
   loadSfxFile('sfx_water_flow.mp3', 'waterFlow');   // 水流环境音（循环，见 setWaterNear）
+  loadSfxFile('sfx_heli.mp3', 'heli');               // 直升机旋翼桨叶怠速循环（见 heliSound*）
   // 鸟叫真声（2026-11-19 用户）：主鸟鸣换成夜莺森林鸣唱；孔雀/布谷鸟作低频特叫
   loadSfxFile('sfx_nightingale.mp3', 'nightingale');
   loadSfxFile('sfx_peacock.mp3', 'peacock');
@@ -495,6 +496,35 @@ export function engineStop() {
       else { nodes.o1.stop(); nodes.o2.stop(); nodes.n.stop(); }
     } catch (e) {}
   }, 800);
+}
+
+// —— 直升机旋翼：assets/sfx_heli.mp3（桨叶怠速实录音）循环，随旋翼转速变响提速 ——
+let heliNodes = null;
+/** 开始循环播放；返回 false 表示文件未加载成功（调用方可回退合成引擎声） */
+export function heliSoundStart() {
+  const c = ensure(); if (!c || heliNodes) return !!heliNodes;
+  const buf = sfxBuffers.get('heli');
+  if (!buf) return false;
+  const src = c.createBufferSource(); src.buffer = buf; src.loop = true;
+  src.playbackRate.value = 0.9;
+  const g = c.createGain(); g.gain.value = 0;
+  src.connect(g).connect(master); src.start();
+  heliNodes = { src, g };
+  g.gain.setTargetAtTime(0.42, c.currentTime, 1.4);   // 慢慢起转，贴合暖机
+  return true;
+}
+/** intensity 0~1：旋翼转速 × 前飞速度的合成强度 */
+export function heliSoundUpdate(intensity) {
+  if (!heliNodes || !ctx || ctx.state !== 'running') return;
+  const t = ctx.currentTime, v = Math.max(0, Math.min(1, intensity || 0));
+  heliNodes.g.gain.setTargetAtTime(0.36 + v * 0.22, t, 0.3);
+  heliNodes.src.playbackRate.setTargetAtTime(0.9 + v * 0.45, t, 0.35);
+}
+export function heliSoundStop() {
+  if (!heliNodes) return;
+  const n = heliNodes; heliNodes = null;
+  n.g.gain.setTargetAtTime(0, ctx.currentTime, 0.5);  // 停转渐弱
+  setTimeout(() => { try { n.src.stop(); } catch (e) {} }, 2500);
 }
 export function engineState() {
   if (!engNodes || !ctx) return { on: false };

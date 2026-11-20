@@ -38,6 +38,7 @@ export const MANIFEST = {
   mutant:    { file: 'mutant.glb', height: 2.4 }, // 变异巨兽（替熊）：头朝 +Z，含 idle/swipe 两段骨骼动画
   zombie:    { file: 'zombie.glb', height: 1.4 }, // 峡谷僵尸（小怪）：头朝 +Z，含 idle/walk/swipe 三段骨骼动画
   bholenath: { file: 'bholenath.glb', height: 9.5, yaw: 180 }, // 凹谷神像（坐姿湿婆，100 万面减到 9 万，源高 2.09m 放大到 9.5m；模型原生面朝 -Z，转 180 面朝谷口/南）
+  heli:      { file: 'heli.glb', length: 9.2, anchor: 'origin' }, // 直升机（MD-500 型，61 万面减到 9.8 万）：机头朝 +Z（与 jeep 同约定），HeliRoot 已置于全机底部中心，Rot=主旋翼/Rot2=尾旋翼由 heli.js 逐帧自转
 };
 
 const cache = new Map();

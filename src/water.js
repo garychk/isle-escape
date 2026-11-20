@@ -233,6 +233,14 @@ const FRAG_BODY = `
   // 海岸水线最小 r≈264，[238,248] 两侧都留足余量，海岸外观零变化。
   float ir = distance(vWorldXZ, vec2(0.0));
   diffuseColor.a *= mix(1.0, smoothstep(uKillInland.x, uKillInland.y, ir), step(0.5, uKillInland.y));
+  // 海面矩形边缘淡出（2026-11-20）：夜里/高空看远海，被雾染成雾色的远海与近乎
+  // 全黑的天穹在海面矩形的边界处形成一条刺眼直边（看起来像一大块方形阴影）。
+  // 根源是天空穹顶 ShaderMaterial 不做 linear→sRGB 输出转换、夜里比雾色暗 8 倍。
+  // 让海面在距边界 30% 处开始平滑淡出、边际融进天空，任何时间/机位都看不到海面尽头。
+  // 水塘/河道 uSize 小，淡出带叠加在原有 basin/水线掩码上，观感不受影响。
+  vec2 ext = uSize * 0.5;
+  vec2 over2 = max(abs(vWorldXZ - uCenter) - ext * 0.70, 0.0) / (ext * 0.30);
+  diffuseColor.a *= 1.0 - clamp(max(over2.x, over2.y), 0.0, 1.0);
   // 远海融入地平线雾：随距离把水色压向雾色（与天空霾带、scene.fog 同源），
   // 海面矩形边缘处已 ≈100% 雾色 → 与天空霾带无缝衔接，看不出世界边际。
   // 水塘/沼泽尺寸 <200m，smoothstep 在其上恒为 0，不受影响。

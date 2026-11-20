@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { Character, SLASH_RATE } from './character.js';
 import { Vehicle } from './vehicle.js';
+import { Heli } from './heli.js';
 import { groundHeight } from './terrain.js';
 import { colliders } from './flora.js';
 
@@ -32,6 +33,9 @@ export class TPS {
     this.vehicles = [
       new Vehicle('jeep', scene, -128.75, 102.5, 1.15),
       new Vehicle('m151', scene, -17.5, 245, 2.7),
+      // 直升机停在木屋空地东北角（空地 21m 内无树、地形已压平到 padY 5.3），
+      // 机头朝西南（对着木屋方向，落地机头朝向开阔处）
+      new Heli(scene, -32.5, 29.5, 0.9),
     ];
     player.tps = this;
     player.vehicles = this.vehicles;
@@ -107,7 +111,8 @@ export class TPS {
       rollT: this.rollT,
       slashT: this.slashT,
       loco: { f: inLen > 0.15 ? f / Math.max(1, inLen) : 0, r: inLen > 0.15 ? r / Math.max(1, inLen) : 0 },
-      visible: true,
+      // 直升机座舱封闭，人物整个藏进机身（地面载具保持可见的驾驶姿态）
+      visible: !(p.inVehicle && p.inVehicle.kind === 'heli'),
     });
 
     this._camera(dt);
@@ -121,9 +126,12 @@ export class TPS {
     if (p.inVehicle) {
       const v = p.inVehicle;
       const fx = Math.sin(v.yaw), fz = Math.cos(v.yaw);
-      const want = 7.6 + Math.abs(v.speed) * 0.16;
+      // 直升机：更高更远的俯瞰机位（在空中能看到整片岛），地面载具保持原机位
+      const isHeli = v.kind === 'heli';
+      const want = isHeli ? 12 + Math.abs(v.speed) * 0.24 : 7.6 + Math.abs(v.speed) * 0.16;
+      const lift = isHeli ? 6.5 : 3.5;
       const target = this.v1.set(v.pos.x, v.pos.y + 2.9, v.pos.z);
-      this.v2.set(v.pos.x - fx * want, v.pos.y + 3.5, v.pos.z - fz * want);
+      this.v2.set(v.pos.x - fx * want, v.pos.y + lift, v.pos.z - fz * want);
       this.v2.y = Math.max(this.v2.y, groundHeight(this.v2.x, this.v2.z) + 1.4);
       cam.position.lerp(this.v2, Math.min(1, dt * 6));
       cam.lookAt(target);
